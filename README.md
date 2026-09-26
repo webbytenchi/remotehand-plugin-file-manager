@@ -1,429 +1,139 @@
 # RemoteHand File Manager
 
-Status: **v0.1.0 implementation started**
+RemoteHand File Manager is a local filesystem browser and file-operation plugin for RemoteHand.
 
-RemoteHand File Manager is intended to be a programmer- and sysadmin-focused file manager integrated into RemoteHand.
+Version **0.1.0** establishes the first complete local-file-management milestone with a Windows-first acceptance target and cross-platform design.
 
-The goal is not to clone Windows Explorer. It should provide fast, predictable navigation and file operations that fit naturally into RemoteHand workflows, especially when combined with RemoteHand Editor, local shells, SSH/SFTP, and future plugin integrations.
+## v0.1.0 highlights
 
-Implementation work has started for the first milestone.
-
-The accepted v0.1.0 scope is documented in [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md). The broader notes below remain long-term product direction and are not all part of v0.1.0.
-
-## Product direction
-
-The File Manager should emphasize:
-
-- fast keyboard-friendly navigation
-- practical file operations
-- local filesystem browsing first
-- clean programmer/sysadmin workflows
-- cross-platform Windows + Linux design
-- strong integration with RemoteHand Editor and terminal workflows
-- safe handling of long-running copy/move/delete operations
-- generic plugin integration rather than hard-coded plugin dependencies
-
-The initial implementation should stay focused and avoid turning into a full desktop shell replacement.
-
-## Initial scope direction
-
-The first useful version should focus on the **local filesystem**.
-
-Remote SFTP browsing already exists elsewhere in RemoteHand. The File Manager should not duplicate or destabilize that functionality initially.
-
-Potential first-version capabilities:
-
-- browse folders
-- single- or dual-pane layout
-- editable path / breadcrumb navigation
-- Back
-- Forward
-- Parent
-- Refresh
+- Single-pane and dual-pane layouts
+- Persisted pane paths, layout, and active pane
+- Independent Back, Forward, Parent, Refresh, and breadcrumb/path navigation
+- Details view with Name, Type, Size, and Modified columns
+- Single and multi-selection
 - New Folder
 - Rename
-- Copy
-- Move
-- Delete
-- Properties
-- sorting by name, size, type, and modified time
-- hidden-files toggle
-- current-directory filtering/search
-- bookmarks / favorites
-- recent locations
-- Copy Path
-- Copy Filename
-- Open Containing Folder
-- Open Terminal Here
-- Open in RemoteHand Editor for text/code files when that integration exists
+- Copy, Cut, Paste, and Move
+- Copy to Other Pane / Move to Other Pane
+- Internal drag-and-drop between panes and onto folders
+- Explicit Copy here / Move here choice for drag-and-drop
+- Recycle Bin / Trash deletion
+- Read-only Properties
+- Live folder Properties scanning with file/folder counts and total size
+- Copy Path / Copy Filename
+- Right-click context menu
+- Symlink-aware browsing and conservative recursive handling
+- Background Copy, Move, and Delete jobs
+- Live item and byte discovery while scanning
+- Transfer progress and cancellation where safe
+- Job status restoration when returning to the File Manager panel
 
-Tabs are also a desirable direction for working across multiple directories.
+## File-operation behavior
 
-Example:
+Copy and Move use the same background job engine whether they are started from the toolbar, context menu, dual-pane actions, clipboard workflow, or internal drag-and-drop.
 
-```text
-C:\Users\Ringo | C:\Projects | Downloads
-```
+Large operations first scan the selected content, then report item and byte progress in the File Manager job bar.
 
-## Single-pane vs dual-pane
+Delete uses Recycle Bin / Trash semantics. Its pre-delete scan can be cancelled. Once the operating system begins the Recycle Bin / Trash operation, cancellation is disabled rather than pretending the operation can be safely interrupted.
 
-A dual-pane workflow is attractive for programmer/sysadmin use because it makes copy/move operations efficient and predictable.
+## Drag-and-drop
 
-Potential model:
+v0.1.0 supports **internal File Manager drag-and-drop**:
 
-```text
-+---------------------------+---------------------------+
-| C:\Projects               | D:\Backups               |
-+---------------------------+---------------------------+
-| remotehand                | releases                  |
-| scripts                   | archives                  |
-| notes.txt                 |                           |
-+---------------------------+---------------------------+
-```
+- between panes
+- onto folders
+- single or multiple selected items
 
-The exact default should be decided during design. A single-pane mode may still be useful for smaller layouts.
+A drop asks whether to **Copy here**, **Move here**, or cancel.
 
-## File operations
+External operating-system drag-and-drop, such as dragging between Windows Explorer and RemoteHand, is not part of v0.1.0.
 
-File operations should be treated as proper jobs rather than blocking the UI.
+## Properties
 
-Large copy/move/delete operations should support:
+Properties are read-only.
 
-- progress
-- current file/path
-- bytes completed / total where measurable
-- file count where measurable
-- cancellation
-- useful error reporting
-- partial-failure handling
-- safe UI behavior while operations continue
+For files, metadata is displayed immediately.
 
-Example:
+For folders, File Manager performs a cancellable background scan and progressively reports:
 
-```text
-Copying 1,284 files
-3.7 GB / 12.1 GB
-[Cancel]
-```
+- file count
+- folder count
+- link count when present
+- total size
 
-The plugin should remain responsive during long operations.
+Closing or dismissing the Properties dialog stops the scan.
 
-## Delete behavior
+## Keyboard and mouse navigation
 
-Deletion should be conservative.
+Supported navigation includes:
 
-Where supported by the platform:
+- Alt+Left — Back
+- Alt+Right — Forward
+- Alt+Up — Parent
+- F5 — Refresh
+- Ctrl+L — edit current path
+- Ctrl+A — select all
+- Ctrl+C — copy
+- Ctrl+X — cut
+- Ctrl+V — paste
+- Ctrl+Shift+N — new folder
+- F2 — rename
+- Delete — move to Recycle Bin / Trash
+- Alt+Enter — Properties
+- mouse side buttons — Back / Forward
 
-- normal Delete should use Recycle Bin / Trash
-- permanent delete should be a separate explicit action
-- permanent delete should require stronger confirmation
-- deleting large selections should clearly state what is being removed
+## Safety and filesystem handling
 
-The default path should not make irreversible deletion easy by accident.
+File Manager treats recursive filesystem operations conservatively:
 
-## Cross-platform direction
+- symlinks are not blindly followed during recursive copy, move, delete, or folder-size scans
+- unsupported filesystem entries fail safely
+- conflicting destinations are rejected before Copy/Move starts
+- normal Delete uses Recycle Bin / Trash rather than permanent removal
 
-The plugin should be designed for **Windows and Linux** from the beginning.
+## Platform direction
 
-### Windows
+v0.1.0 has been accepted primarily on Windows.
 
-Support concepts such as:
+The plugin is designed to remain portable to Linux, including platform-appropriate path, symlink, and Trash behavior. Linux acceptance and packaging can be expanded independently without moving file-manager semantics into RemoteHand core.
 
-- drive roots such as `C:\`, `D:\`
-- Windows path rules
-- hidden/system attributes where relevant
-- Recycle Bin behavior where available
-- Windows-specific metadata only when useful
+## Deferred beyond v0.1.0
 
-### Linux
+The first release intentionally does not include:
 
-Support concepts such as:
-
-- root filesystem `/`
-- mounted filesystems
-- dotfile hidden behavior
-- symlinks
-- Unix permissions
-- Trash behavior where available
-- executable bit and other meaningful metadata
-
-The UI should normalize common concepts while not pretending Windows ACLs and Unix permissions are identical.
-
-## Symlinks and special files
-
-Symlinks must be handled carefully.
-
-The plugin should:
-
-- clearly distinguish links from normal files/folders
-- avoid surprising recursive behavior
-- avoid following links blindly during recursive delete/copy
-- show link targets where practical
-
-Linux special files and other non-regular entries should be treated conservatively rather than assuming every directory entry behaves like a normal file.
-
-## Tabs and session state
-
-Potential future session behavior:
-
-- multiple directory tabs
-- remember open tabs
-- restore active tab
-- remember tab order
-- remember each tab's path
-- remember view mode and sorting where useful
-
-The exact persistence model should be designed after the basic browser works reliably.
-
-## Search and filtering
-
-Initial search should remain lightweight.
-
-A first version can support filtering the current directory by filename.
-
-Later versions may support recursive search with:
-
-- filename
-- extension
-- size
-- modified date
-- simple text-content search where justified
-
-Avoid building a full filesystem indexing service unless real use proves it is necessary.
-
-## Bookmarks and recent locations
-
-Useful programmer/sysadmin conveniences:
-
-- favorite folders
-- recent paths
-- pinned project directories
-- quick access to common locations
-
-These should be stored as plugin-owned preferences.
-
-## RemoteHand Editor integration
-
-One of the key future workflows is:
-
-```text
-File Manager -> Open in Editor
-Editor -> Show in File Manager
-```
-
-This should not be implemented as File Manager hard-coding knowledge of the Editor plugin.
-
-The preferred architectural direction is a generic RemoteHand action/intent system where plugins can advertise or handle capabilities such as:
-
-- `open-file`
-- `reveal-path`
-- `open-terminal-at-path`
-
-A compatible installed plugin can then handle the action.
-
-This keeps the integration extensible to future plugins.
-
-## Terminal integration
-
-A core workflow should eventually be:
-
-```text
-File Manager -> Open Terminal Here
-```
-
-The File Manager should pass the selected/current directory through a generic host/plugin action rather than embedding terminal-specific behavior directly.
-
-Likewise, a terminal or other plugin could later request:
-
-```text
-Reveal this path in File Manager
-```
-
-## SFTP + Editor workflow
-
-A major future integration is remote editing through SFTP.
-
-Desired user experience:
-
-```text
-SFTP -> Open in Editor -> edit -> Save -> write back to same remote path
-```
-
-The user should not need to manually:
-
-1. download the file
-2. edit it locally
-3. upload it again
-
-The complexity should remain behind the integration layer.
-
-### Provider-style document model
-
-A preferred architecture is for Editor documents to have a source/provider abstraction.
-
-Conceptually:
-
-```text
-Editor
-  |
-  +-- provider.read
-  |
-  +-- local recovery buffer
-  |
-  +-- provider.write
-```
-
-Potential providers:
-
-- local filesystem
-- SFTP
-- future remote filesystem providers
-
-The Editor should not need to understand SFTP credentials, transport, or remote filesystem semantics.
-
-The SFTP side owns remote-file access.
-
-The Editor owns:
-
-- text editing
-- recovery
-- save UX
-- document state
-
-## SFTP remote-save safety
-
-When a file is opened from SFTP and edited in Editor, the future integration should aim to:
-
-- remember the originating connection/profile reference
-- remember the remote path
-- retain a local recovery copy until remote save succeeds
-- detect whether the remote file changed since it was opened where practical
-- warn before overwriting a remote file that appears to have changed
-- preserve permissions where possible
-- use a safer temporary-upload + rename strategy where the server supports it
-- keep the user's edits recoverable if the connection becomes unavailable
-- allow retry
-- eventually support Save As to another local or remote destination
-
-If the remote write fails, the edited content must not be lost.
-
-## Generic provider direction
-
-The File Manager and Editor should eventually benefit from generic resource/provider contracts rather than pairwise hard-coded integrations.
-
-Examples of useful generic concepts:
-
-- open resource
-- read resource
-- write resource
-- reveal resource
-- open terminal at location
-- describe source/location
-
-These contracts should be designed only when concrete plugin implementations require them.
-
-Do not add speculative RemoteHand core APIs merely to make the architecture look complete.
-
-## Local versus remote file management
-
-For the initial File Manager:
-
-**Local filesystem first.**
-
-Remote SFTP remains in the existing SFTP surface.
-
-A unified local/remote file-browser abstraction may be considered later only if real use demonstrates that it improves workflows without creating unnecessary complexity.
-
-## Potential later features
-
-After the local browsing and operations foundation is stable:
-
-- dual-pane workflow
+- external OS drag-and-drop
 - directory tabs
-- drag/drop where reliable
+- folder tree sidebar
 - batch rename
+- permanent delete
 - archive create/extract
-- checksum calculation
-- directory size calculation
-- recursive search
-- file previews
-- quick image preview
-- text preview
+- checksums
 - permission editing
-- compare directories
-- remote providers
-- richer file-operation queue
+- directory comparison
+- rich previews
+- recursive filesystem search/indexing
+- Editor integration
+- SFTP integration
+- generic cross-plugin action/intent contracts
+- column sorting controls
+- hidden-files toggle
+- opening regular files with the OS default application
 
-These are deliberately deferred.
+These can be added in later milestones without destabilizing the v0.1.0 foundation.
 
-## Non-goals for early versions
+## Architecture
 
-Avoid initially:
-
-- full Windows Explorer replacement
-- full desktop shell integration
-- cloud storage client
-- filesystem indexing daemon
-- disk partition management
-- disk formatting
-- undelete/recovery tooling
-- duplicate-file cleaner
-- destructive bulk automation
-- archive-manager replacement
-- hard-coded knowledge of every RemoteHand plugin
-
-The goal is a reliable RemoteHand-native file manager for daily programmer/admin work.
-
-## Architecture rule
-
-RemoteHand core owns generic infrastructure such as:
-
-- plugin runtime
-- plugin-scoped storage
-- generic file access permissions/APIs where needed
-- panels/navigation
-- sidebar contribution plumbing
-- generic actions/intents if and when proven necessary
+RemoteHand core owns generic plugin infrastructure.
 
 RemoteHand File Manager owns:
 
 - directory navigation
 - selection
-- file-operation semantics
-- bookmarks
-- recent locations
-- sorting/filtering
-- progress/cancellation UX
-- file-manager presentation
-- platform-specific file-management behavior
+- filesystem operations
+- progress and cancellation behavior
+- File Manager presentation
+- platform-specific file-management semantics
 
-RemoteHand Editor owns text-editing semantics.
+The plugin does not require RemoteHand core to hard-code File Manager behavior.
 
-SFTP owns remote filesystem transport and remote-file semantics.
-
-Do not move filesystem-management semantics into RemoteHand core.
-
-## Open design questions
-
-Before implementation begins, decide:
-
-- single-pane, dual-pane, or switchable layout
-- initial table/list presentation
-- file-operation job model
-- cancellation semantics
-- recycle-bin/trash implementation per OS
-- symlink behavior
-- permission model
-- session/tab restoration
-- exact generic action/intent contract for Editor and terminal integration
-- whether provider abstractions belong in RemoteHand core or remain plugin-side until more than one plugin proves the need
-- how local file change notifications should work
-- large-directory virtualization strategy
-- directory-size calculation policy
-- maximum preview/file-size limits
-
-## Development status
-
-**v0.1.0 implementation started.**
-
-The first milestone is explicitly scoped in [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md). Development should proceed in small, testable slices while preserving the broader architecture and deferred-feature boundaries documented here.
+See [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md) for the finalized first-milestone design and [CHANGELOG.md](CHANGELOG.md) for release history.
