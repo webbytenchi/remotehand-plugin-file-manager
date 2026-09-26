@@ -300,6 +300,32 @@ impl JobManager {
         Ok(control)
     }
 
+    fn create_delete(&self, sources: &[PathBuf]) -> Result<Arc<JobControl>, String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        let snapshot = JobSnapshot {
+            id,
+            kind: "delete".to_string(),
+            state: "queued".to_string(),
+            sources: sources.iter().map(|source| path_text(source)).collect(),
+            destination: String::new(),
+            bytes_total: 0,
+            bytes_done: 0,
+            items_total: 0,
+            items_done: 0,
+            cancellable: true,
+            error: None,
+        };
+        let control = Arc::new(JobControl {
+            snapshot: Mutex::new(snapshot),
+            cancel: AtomicBool::new(false),
+        });
+        self.jobs
+            .lock()
+            .map_err(|_| "job store lock poisoned".to_string())?
+            .insert(id, Arc::clone(&control));
+        Ok(control)
+    }
+
     fn get(&self, id: u64) -> Result<JobSnapshot, String> {
         let control = self
             .jobs
@@ -343,7 +369,7 @@ impl JobManager {
                 .lock()
                 .map_err(|_| "job state lock poisoned".to_string())?
                 .clone();
-            if matches!(snapshot.state.as_str(), "queued" | "scanning" | "running") {
+            if matches!(snapshot.state.as_str(), "queued" | "scanning" | "running" | "deleting") {
                 return Ok(Some(snapshot));
             }
         }
@@ -712,6 +738,100 @@ fn validate_job_paths(source: &Path, destination_dir: &Path) -> Result<(PathBuf,
         }
     }
     Ok((source, destination))
+}
+
+fn start_delete_job(
+    manager: Arc<JobManager>,
+    source_paths: &[String],
+) -> Result<Value, String> {
+    if source_paths.is_empty() {
+        return Err("at least one source is required".to_string());
+    }
+    if source_paths.len() > 10_000 {
+        return Err("too many items selected".to_string());
+    }
+
+    let sources: Vec<PathBuf> = source_paths
+        .iter()
+        .map(|path| resolve_entry_without_following(Path::new(path)))
+        .collect::<Result<_, _>>()?;
+
+    let control = manager.create_delete(&sources)?;
+    let id = control
+        .snapshot
+        .lock()
+        .map_err(|_| "job state lock poisoned".to_string())?
+        .id;
+    let control_for_thread = Arc::clone(&control);
+
+    thread::spawn(move || {
+        let outcome = (|| -> Result<(), String> {
+            {
+                let mut snapshot = control_for_thread
+                    .snapshot
+                    .lock()
+                    .map_err(|_| "job state lock poisoned".to_string())?;
+                snapshot.state = "scanning".to_string();
+            }
+
+            let mut totals = (0u64, 0u64);
+            for source in &sources {
+                scan_tree(
+                    source,
+                    &mut totals,
+                    &control_for_thread.cancel,
+                    Some(&control_for_thread),
+                )?;
+            }
+
+            if control_for_thread.cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+
+            {
+                let mut snapshot = control_for_thread
+                    .snapshot
+                    .lock()
+                    .map_err(|_| "job state lock poisoned".to_string())?;
+                snapshot.bytes_total = totals.0;
+                snapshot.items_total = totals.1;
+                snapshot.state = "deleting".to_string();
+                snapshot.cancellable = false;
+            }
+
+            trash::delete_all(&sources)
+                .map_err(|error| format!("cannot move selected item(s) to Recycle Bin/Trash: {error}"))?;
+
+            let mut snapshot = control_for_thread
+                .snapshot
+                .lock()
+                .map_err(|_| "job state lock poisoned".to_string())?;
+            snapshot.bytes_done = snapshot.bytes_total;
+            snapshot.items_done = snapshot.items_total;
+            Ok(())
+        })();
+
+        if let Ok(mut snapshot) = control_for_thread.snapshot.lock() {
+            snapshot.cancellable = false;
+            match outcome {
+                Ok(()) => {
+                    snapshot.state = "completed".to_string();
+                    snapshot.bytes_done = snapshot.bytes_total;
+                    snapshot.items_done = snapshot.items_total;
+                }
+                Err(error) if error == "cancelled" => {
+                    snapshot.state = "cancelled".to_string();
+                    snapshot.error = None;
+                }
+                Err(error) => {
+                    snapshot.state = "failed".to_string();
+                    snapshot.error = Some(error);
+                }
+            }
+        }
+    });
+
+    Ok(json!({ "jobId": id }))
 }
 
 fn start_job(
@@ -1151,6 +1271,13 @@ fn dispatch(
                 .map_err(|error| format!("invalid properties scan cancel request: {error}"))?;
             serde_json::to_value(property_scans.cancel(params.id)?).map_err(|error| error.to_string())
         }
+        "fs.job.delete.start" => {
+            #[derive(Deserialize)]
+            struct Params { sources: Vec<String> }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid delete-job request: {error}"))?;
+            start_delete_job(Arc::clone(jobs), &params.sources)
+        }
         "fs.job.start" => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -1409,6 +1536,22 @@ mod tests {
         assert_eq!(snapshot.bytes, 30);
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn delete_job_is_reported_as_active_while_deleting() {
+        let manager = JobManager::default();
+        let source = PathBuf::from("source");
+        let control = manager.create_delete(&[source]).unwrap();
+        {
+            let mut snapshot = control.snapshot.lock().unwrap();
+            snapshot.state = "deleting".to_string();
+            snapshot.cancellable = false;
+        }
+        let active = manager.active().unwrap().unwrap();
+        assert_eq!(active.kind, "delete");
+        assert_eq!(active.state, "deleting");
+        assert!(!active.cancellable);
     }
 
     #[test]
