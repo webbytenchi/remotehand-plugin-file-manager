@@ -557,12 +557,7 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     await panes.left.load(leftPath, "initial", true);
 
     const rightPath = stored && stored.rightPath ? stored.rightPath : panes.left.currentPath;
-    if (dualPane) {
-      await panes.right.load(rightPath || null, "initial", true);
-    } else if (rightPath) {
-      panes.right.currentPath = rightPath;
-      panes.right.pathInput.value = rightPath;
-    }
+    await panes.right.load(rightPath || null, "initial", true);
 
     applyLayout();
     setActivePane(activePaneId);
