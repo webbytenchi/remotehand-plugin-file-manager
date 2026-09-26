@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>File Manager</title>
+<style>
+*{box-sizing:border-box}
+html,body{width:100%;height:100%;margin:0}
+body{font-family:var(--remotehand-ui-font-family,Inter,ui-sans-serif,system-ui,sans-serif);font-size:var(--remotehand-ui-font-size,13px);background:var(--remotehand-background,#11151a);color:var(--remotehand-text,#dee5ef)}
+.shell{height:100%;display:flex;flex-direction:column;padding:12px;gap:10px}
+.header{display:flex;align-items:center;gap:10px}
+.header h1{font-size:18px;margin:0}
+.spacer{flex:1}
+button,input{font:inherit}
+button{border:1px solid var(--remotehand-border,#3d4a58);background:var(--remotehand-button-background,#232c37);color:var(--remotehand-text,#f3f7fb);border-radius:7px;padding:7px 10px;cursor:pointer}
+button:hover{background:var(--remotehand-button-hover,#2a3542)}
+button:disabled{opacity:.45;cursor:default}
+.pane{min-height:0;flex:1;display:flex;flex-direction:column;border:1px solid var(--remotehand-border,#2e3743);border-radius:10px;background:var(--remotehand-surface,#171d24);overflow:hidden}
+.nav{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
+.nav button{min-width:34px;padding:6px 8px}
+.path-wrap{min-width:0;flex:1}
+.path-input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:7px 9px;outline:none}
+.path-input:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
+.status{padding:7px 10px;color:var(--remotehand-muted-text,#93a1b2);font-size:12px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
+.error{color:var(--remotehand-danger-text,#ffc6c6)}
+.table-wrap{min-height:0;flex:1;overflow:auto}
+table{width:100%;border-collapse:collapse;table-layout:fixed}
+th,td{padding:8px 10px;border-bottom:1px solid var(--remotehand-border,#293440);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+th{text-align:left;color:var(--remotehand-muted-text,#93a1b2);font-size:11px;position:sticky;top:0;background:var(--remotehand-surface,#171d24);z-index:1}
+th:nth-child(1){width:48%}th:nth-child(2){width:18%}th:nth-child(3){width:14%;text-align:right}th:nth-child(4){width:20%}
+td:nth-child(3){text-align:right}
+tr.entry{cursor:default}
+tr.entry:hover{background:var(--remotehand-surface-raised,#1d2630)}
+tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
+.name-cell{display:flex;align-items:center;gap:8px;min-width:0}
+.icon{width:18px;flex:0 0 18px;text-align:center}
+.name{overflow:hidden;text-overflow:ellipsis}
+.empty{padding:28px 14px;text-align:center;color:var(--remotehand-muted-text,#93a1b2)}
+</style>
+</head>
+<body>
+<div class="shell">
+  <div class="header">
+    <h1>File Manager</h1>
+    <div class="spacer"></div>
+    <button id="refreshTop" type="button">Refresh</button>
+  </div>
+
+  <section class="pane" aria-label="File browser">
+    <div class="nav">
+      <button id="back" type="button" title="Back (Alt+Left)">←</button>
+      <button id="forward" type="button" title="Forward (Alt+Right)">→</button>
+      <button id="parent" type="button" title="Parent (Alt+Up)">↑</button>
+      <button id="refresh" type="button" title="Refresh (F5)">⟳</button>
+      <div class="path-wrap">
+        <input id="path" class="path-input" autocomplete="off" spellcheck="false" aria-label="Current path">
+      </div>
+    </div>
+    <div id="status" class="status">Loading…</div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr>
+        </thead>
+        <tbody id="body"></tbody>
+      </table>
+      <div id="empty" class="empty" hidden>This folder is empty.</div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const request = (method, params = null) => window.remotehand.request(method, params);
+
+  const state = {
+    currentPath: "",
+    parentPath: null,
+    entries: [],
+    back: [],
+    forward: [],
+    selectedPath: null,
+    busy: false
+  };
+
+  const pathInput = document.getElementById("path");
+  const body = document.getElementById("body");
+  const empty = document.getElementById("empty");
+  const status = document.getElementById("status");
+  const backButton = document.getElementById("back");
+  const forwardButton = document.getElementById("forward");
+  const parentButton = document.getElementById("parent");
+  const refreshButton = document.getElementById("refresh");
+  const refreshTop = document.getElementById("refreshTop");
+
+  const kindLabel = kind => ({
+    directory: "Folder",
+    file: "File",
+    symlink: "Link",
+    other: "Other"
+  }[kind] || kind);
+
+  const kindIcon = kind => ({
+    directory: "📁",
+    file: "📄",
+    symlink: "↗",
+    other: "•"
+  }[kind] || "•");
+
+  const formatSize = size => {
+    if (size === null || size === undefined) return "";
+    if (size < 1024) return `${size} B`;
+    const units = ["KB", "MB", "GB", "TB"];
+    let value = size / 1024;
+    let unit = units[0];
+    for (let index = 1; index < units.length && value >= 1024; index += 1) {
+      value /= 1024;
+      unit = units[index];
+    }
+    return `${value >= 10 ? value.toFixed(1) : value.toFixed(2)} ${unit}`;
+  };
+
+  const formatModified = value => {
+    if (!value) return "";
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  };
+
+  function setBusy(value) {
+    state.busy = value;
+    backButton.disabled = value || state.back.length === 0;
+    forwardButton.disabled = value || state.forward.length === 0;
+    parentButton.disabled = value || !state.parentPath;
+    refreshButton.disabled = value || !state.currentPath;
+    refreshTop.disabled = value || !state.currentPath;
+    pathInput.disabled = value;
+  }
+
+  function updateButtons() {
+    backButton.disabled = state.busy || state.back.length === 0;
+    forwardButton.disabled = state.busy || state.forward.length === 0;
+    parentButton.disabled = state.busy || !state.parentPath;
+    refreshButton.disabled = state.busy || !state.currentPath;
+    refreshTop.disabled = state.busy || !state.currentPath;
+  }
+
+  function render() {
+    body.replaceChildren();
+    empty.hidden = state.entries.length !== 0;
+
+    for (const entry of state.entries) {
+      const row = document.createElement("tr");
+      row.className = "entry";
+      if (entry.path === state.selectedPath) row.classList.add("selected");
+      row.tabIndex = 0;
+
+      const nameCell = document.createElement("td");
+      const nameWrap = document.createElement("div");
+      nameWrap.className = "name-cell";
+      const icon = document.createElement("span");
+      icon.className = "icon";
+      icon.textContent = kindIcon(entry.kind);
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = entry.name;
+      nameWrap.append(icon, name);
+      nameCell.append(nameWrap);
+
+      const typeCell = document.createElement("td");
+      typeCell.textContent = kindLabel(entry.kind);
+      const sizeCell = document.createElement("td");
+      sizeCell.textContent = formatSize(entry.size);
+      const modifiedCell = document.createElement("td");
+      modifiedCell.textContent = formatModified(entry.modifiedMs);
+
+      row.append(nameCell, typeCell, sizeCell, modifiedCell);
+
+      row.addEventListener("click", () => {
+        state.selectedPath = entry.path;
+        render();
+      });
+
+      row.addEventListener("dblclick", () => {
+        if (entry.kind === "directory") navigate(entry.path);
+      });
+
+      row.addEventListener("keydown", event => {
+        if (event.key === "Enter" && entry.kind === "directory") {
+          event.preventDefault();
+          navigate(entry.path);
+        }
+      });
+
+      body.append(row);
+    }
+
+    status.classList.remove("error");
+    status.textContent = `${state.entries.length} item${state.entries.length === 1 ? "" : "s"}`;
+    updateButtons();
+  }
+
+  async function load(path = null, historyMode = "push") {
+    if (state.busy) return;
+    const previousPath = state.currentPath;
+    setBusy(true);
+    status.classList.remove("error");
+    status.textContent = "Loading…";
+
+    try {
+      const result = path === null
+        ? await request("fs.initial")
+        : await request("fs.list", { path });
+
+      if (historyMode === "push" && previousPath && previousPath !== result.path) {
+        state.back.push(previousPath);
+        state.forward = [];
+      }
+
+      state.currentPath = result.path;
+      state.parentPath = result.parent || null;
+      state.entries = Array.isArray(result.entries) ? result.entries : [];
+      state.selectedPath = null;
+      pathInput.value = state.currentPath;
+      render();
+    } catch (error) {
+      status.classList.add("error");
+      status.textContent = String(error);
+      pathInput.value = state.currentPath || path || "";
+    } finally {
+      setBusy(false);
+      updateButtons();
+    }
+  }
+
+  function navigate(path) {
+    if (!path || path === state.currentPath) return;
+    load(path, "push");
+  }
+
+  async function goBack() {
+    if (state.busy || state.back.length === 0) return;
+    const target = state.back.pop();
+    if (state.currentPath) state.forward.push(state.currentPath);
+    await load(target, "history");
+  }
+
+  async function goForward() {
+    if (state.busy || state.forward.length === 0) return;
+    const target = state.forward.pop();
+    if (state.currentPath) state.back.push(state.currentPath);
+    await load(target, "history");
+  }
+
+  backButton.addEventListener("click", goBack);
+  forwardButton.addEventListener("click", goForward);
+  parentButton.addEventListener("click", () => state.parentPath && navigate(state.parentPath));
+  refreshButton.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
+  refreshTop.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
+
+  pathInput.addEventListener("keydown", event => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      const target = pathInput.value.trim();
+      if (target) navigate(target);
+    } else if (event.key === "Escape") {
+      pathInput.value = state.currentPath;
+      pathInput.blur();
+    }
+  });
+
+  window.addEventListener("keydown", event => {
+    if (event.ctrlKey && event.key.toLowerCase() === "l") {
+      event.preventDefault();
+      pathInput.focus();
+      pathInput.select();
+      return;
+    }
+    if (event.altKey && event.key === "ArrowLeft") {
+      event.preventDefault();
+      goBack();
+      return;
+    }
+    if (event.altKey && event.key === "ArrowRight") {
+      event.preventDefault();
+      goForward();
+      return;
+    }
+    if (event.altKey && event.key === "ArrowUp") {
+      event.preventDefault();
+      if (state.parentPath) navigate(state.parentPath);
+      return;
+    }
+    if (event.key === "F5") {
+      event.preventDefault();
+      if (state.currentPath) load(state.currentPath, "refresh");
+    }
+  });
+
+  load(null, "initial");
+})();
+</script>
+</body>
+</html>
