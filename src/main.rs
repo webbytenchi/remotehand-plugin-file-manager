@@ -911,7 +911,7 @@ fn dispatch(
                 .map_err(|error| format!("invalid delete request: {error}"))?;
             recycle_entries(&[params.path])
         }
-        "fs.deleteMany" => {
+        "fs.delete-many" => {
             #[derive(Deserialize)]
             struct Params { paths: Vec<String> }
             let params: Params = serde_json::from_value(request.params.clone())
