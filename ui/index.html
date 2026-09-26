@@ -178,6 +178,10 @@ tr.entry.cut{opacity:.55}
   const modalBody = document.getElementById("modalBody");
   const modalActions = document.getElementById("modalActions");
 
+  modalBackdrop.addEventListener("mousedown", event => {
+    if (event.target === modalBackdrop) dismissModal();
+  });
+
   let dualPane = false;
   let activePaneId = "left";
   let saveTimer = null;
@@ -186,6 +190,7 @@ tr.entry.cut{opacity:.55}
   let activeJobCutPaths = null;
   let modalDismiss = null;
   let contextPaneId = null;
+  let activePropertiesScanId = null;
   const panes = {};
 
   const svg = {
@@ -737,7 +742,18 @@ tr.entry.cut{opacity:.55}
     }, 150);
   }
 
+  function cancelPropertiesScan() {
+    const id = activePropertiesScanId;
+    activePropertiesScanId = null;
+    if (id !== null) {
+      void request("fs.properties.scan.cancel", { id }).catch(error => {
+        console.warn("Could not cancel File Manager properties scan:", error);
+      });
+    }
+  }
+
   function closeModal() {
+    cancelPropertiesScan();
     modalBackdrop.hidden = true;
     modalTitle.textContent = "";
     modalBody.replaceChildren();
@@ -812,23 +828,28 @@ tr.entry.cut{opacity:.55}
     modalBody.replaceChildren();
     const dl = document.createElement("dl");
     dl.className = "props";
+    const refs = {};
     const rows = [
-      ["Name", properties.name],
-      ["Type", properties.kind],
-      ["Location", properties.path],
-      ["Size", properties.size == null ? "—" : formatSize(properties.size)],
-      ["Modified", properties.modifiedMs ? formatModified(properties.modifiedMs) : "—"],
-      ["Hidden", properties.hidden ? "Yes" : "No"]
+      ["Name", properties.name, "name"],
+      ["Type", properties.kind, "type"],
+      ["Location", properties.path, "location"],
+      ["Size", properties.size == null ? (properties.kind === "directory" ? "Calculating…" : "—") : formatSize(properties.size), "size"],
+      ["Modified", properties.modifiedMs ? formatModified(properties.modifiedMs) : "—", "modified"],
+      ["Hidden", properties.hidden ? "Yes" : "No", "hidden"]
     ];
-    if (properties.linkTarget) rows.push(["Link target", properties.linkTarget]);
-    if (properties.linkTargetKind) rows.push(["Target type", properties.linkTargetKind]);
-    for (const [label, value] of rows) {
+    if (properties.kind === "directory") rows.splice(4, 0, ["Contains", "Scanning…", "contains"]);
+    if (properties.linkTarget) rows.push(["Link target", properties.linkTarget, "linkTarget"]);
+    if (properties.linkTargetKind) rows.push(["Target type", properties.linkTargetKind, "linkTargetKind"]);
+
+    for (const [label, value, key] of rows) {
       const dt = document.createElement("dt");
       const dd = document.createElement("dd");
       dt.textContent = label;
       dd.textContent = String(value ?? "—");
+      refs[key] = dd;
       dl.append(dt, dd);
     }
+
     modalBody.append(dl);
     modalActions.replaceChildren();
     const close = actionButton("Close", true);
@@ -837,6 +858,47 @@ tr.entry.cut{opacity:.55}
     modalActions.append(close);
     modalBackdrop.hidden = false;
     close.focus();
+    return refs;
+  }
+
+  async function pollPropertiesScan(id, refs) {
+    try {
+      for (;;) {
+        if (activePropertiesScanId !== id || modalBackdrop.hidden) return;
+        const scan = await request("fs.properties.scan.get", { id });
+        if (activePropertiesScanId !== id || modalBackdrop.hidden) return;
+
+        const files = Number(scan.files || 0);
+        const folders = Number(scan.folders || 0);
+        const links = Number(scan.links || 0);
+        const bytes = Number(scan.bytes || 0);
+        const parts = [
+          `${files.toLocaleString()} file${files === 1 ? "" : "s"}`,
+          `${folders.toLocaleString()} folder${folders === 1 ? "" : "s"}`
+        ];
+        if (links > 0) parts.push(`${links.toLocaleString()} link${links === 1 ? "" : "s"}`);
+
+        if (refs.contains) {
+          refs.contains.textContent = parts.join(", ") + (scan.state === "scanning" ? " · scanning…" : "");
+        }
+        if (refs.size) refs.size.textContent = formatSize(bytes);
+
+        if (["completed", "failed", "cancelled"].includes(scan.state)) {
+          activePropertiesScanId = null;
+          if (scan.state === "failed" && refs.contains) {
+            refs.contains.textContent = scan.error || "Folder scan failed";
+          }
+          return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 180));
+      }
+    } catch (error) {
+      if (activePropertiesScanId === id) {
+        activePropertiesScanId = null;
+        if (refs.contains) refs.contains.textContent = String(error);
+      }
+    }
   }
 
   async function refreshAllPanes() {
@@ -990,8 +1052,14 @@ tr.entry.cut{opacity:.55}
     if (!entry) return;
     try {
       const properties = await request("fs.properties", { path: entry.path });
-      showPropertiesModal(properties);
+      const refs = showPropertiesModal(properties);
+      if (properties.kind === "directory") {
+        const started = await request("fs.properties.scan.start", { path: entry.path });
+        activePropertiesScanId = started.scanId;
+        void pollPropertiesScan(activePropertiesScanId, refs);
+      }
     } catch (error) {
+      closeModal();
       await confirmModal("Could not read properties", String(error), "Close");
     }
   }
