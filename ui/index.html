@@ -8,6 +8,7 @@
 *{box-sizing:border-box}
 html,body{width:100%;height:100%;margin:0}
 body{font-family:var(--remotehand-ui-font-family,Inter,ui-sans-serif,system-ui,sans-serif);font-size:var(--remotehand-ui-font-size,13px);background:var(--remotehand-background,#11151a);color:var(--remotehand-text,#dee5ef);user-select:none}
+[hidden]{display:none!important}
 .shell{height:100%;display:flex;flex-direction:column;padding:12px;gap:10px}
 .header{display:flex;align-items:center;gap:10px}
 .header h1{font-size:18px;margin:0}
@@ -16,20 +17,23 @@ button,input{font:inherit}
 button{border:1px solid var(--remotehand-border,#3d4a58);background:var(--remotehand-button-background,#232c37);color:var(--remotehand-text,#f3f7fb);border-radius:7px;padding:7px 10px;cursor:pointer}
 button:hover{background:var(--remotehand-button-hover,#2a3542)}
 button:disabled{opacity:.45;cursor:default}
-.pane{min-height:0;flex:1;display:flex;flex-direction:column;border:1px solid var(--remotehand-border,#2e3743);border-radius:10px;background:var(--remotehand-surface,#171d24);overflow:hidden}
+button.toggle[aria-pressed="true"]{border-color:var(--remotehand-accent-border,#5d7fa4);background:var(--remotehand-accent-surface,#19304a)}
+.panes{min-height:0;flex:1;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
+.panes.dual{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
+.pane{min-width:0;min-height:0;display:flex;flex-direction:column;border:1px solid var(--remotehand-border,#2e3743);border-radius:10px;background:var(--remotehand-surface,#171d24);overflow:hidden}
+.pane.active{border-color:var(--remotehand-accent-border,#5d7fa4);box-shadow:0 0 0 1px color-mix(in srgb,var(--remotehand-accent-border,#5d7fa4) 32%,transparent)}
 .nav{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
 .nav button{min-width:34px;padding:6px 8px}
 .path-wrap{min-width:0;flex:1}
 .breadcrumbs{min-height:32px;width:100%;display:flex;align-items:center;gap:2px;overflow:hidden;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);border-radius:7px;padding:3px 5px;outline:none}
 .breadcrumbs:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
-.crumb{border:0;background:transparent;color:var(--remotehand-text,#eef3f8);padding:4px 6px;border-radius:5px;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb{border:0;background:transparent;color:var(--remotehand-text,#eef3f8);padding:4px 6px;border-radius:5px;min-width:0;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .crumb:hover{background:var(--remotehand-button-hover,#2a3542)}
 .crumb-sep{color:var(--remotehand-muted-text,#93a1b2);padding:0 1px;flex:0 0 auto}
 .path-input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:7px 9px;outline:none;user-select:text}
 .path-input:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
-[hidden]{display:none!important}
 .status{padding:7px 10px;color:var(--remotehand-muted-text,#93a1b2);font-size:12px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
-.error{color:var(--remotehand-danger-text,#ffc6c6)}
+.status.error{color:var(--remotehand-danger-text,#ffc6c6)}
 .table-wrap{min-height:0;flex:1;overflow:auto}
 table{width:100%;border-collapse:collapse;table-layout:fixed}
 th,td{padding:8px 10px;border-bottom:1px solid var(--remotehand-border,#293440);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -47,6 +51,7 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 .icon.broken{color:var(--remotehand-danger-text,#ffc6c6)}
 .name{overflow:hidden;text-overflow:ellipsis}
 .empty{padding:28px 14px;text-align:center;color:var(--remotehand-muted-text,#93a1b2)}
+@media(max-width:760px){.panes.dual{grid-template-columns:minmax(0,1fr)}.panes.dual .pane[data-pane="right"]{min-height:280px}}
 </style>
 </head>
 <body>
@@ -54,95 +59,45 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   <div class="header">
     <h1>File Manager</h1>
     <div class="spacer"></div>
-    <button id="refreshTop" type="button">Refresh</button>
+    <button id="dualToggle" class="toggle" type="button" aria-pressed="false" title="Show or hide the second file pane">Dual Pane</button>
   </div>
+  <div id="panes" class="panes"></div>
+</div>
 
-  <section class="pane" aria-label="File browser">
+<template id="paneTemplate">
+  <section class="pane">
     <div class="nav">
-      <button id="back" type="button" title="Back (Alt+Left)">←</button>
-      <button id="forward" type="button" title="Forward (Alt+Right)">→</button>
-      <button id="parent" type="button" title="Parent (Alt+Up)">↑</button>
-      <button id="refresh" type="button" title="Refresh (F5)">⟳</button>
-      <div id="pathWrap" class="path-wrap">
-        <div id="breadcrumbs" class="breadcrumbs" tabindex="0" aria-label="Current path"></div>
-        <input id="path" class="path-input" autocomplete="off" spellcheck="false" aria-label="Edit current path" hidden>
+      <button class="back" type="button" title="Back (Alt+Left)">←</button>
+      <button class="forward" type="button" title="Forward (Alt+Right)">→</button>
+      <button class="parent" type="button" title="Parent (Alt+Up)">↑</button>
+      <button class="refresh" type="button" title="Refresh (F5)">⟳</button>
+      <div class="path-wrap">
+        <div class="breadcrumbs" tabindex="0" aria-label="Current path"></div>
+        <input class="path-input" autocomplete="off" spellcheck="false" aria-label="Edit current path" hidden>
       </div>
     </div>
-    <div id="status" class="status">Loading…</div>
+    <div class="status">Loading…</div>
     <div class="table-wrap">
       <table>
-        <thead>
-          <tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr>
-        </thead>
-        <tbody id="body"></tbody>
+        <thead><tr><th>Name</th><th>Type</th><th>Size</th><th>Modified</th></tr></thead>
+        <tbody></tbody>
       </table>
-      <div id="empty" class="empty" hidden>This folder is empty.</div>
+      <div class="empty" hidden>This folder is empty.</div>
     </div>
   </section>
-</div>
+</template>
 
 <script>
 (() => {
   const request = (method, params = null) => window.remotehand.request(method, params);
+  const panesHost = document.getElementById("panes");
+  const paneTemplate = document.getElementById("paneTemplate");
+  const dualToggle = document.getElementById("dualToggle");
 
-  const state = {
-    currentPath: "",
-    parentPath: null,
-    entries: [],
-    back: [],
-    forward: [],
-    selectedPath: null,
-    busy: false
-  };
-
-  const pathWrap = document.getElementById("pathWrap");
-  const breadcrumbs = document.getElementById("breadcrumbs");
-  const pathInput = document.getElementById("path");
-  const body = document.getElementById("body");
-  const empty = document.getElementById("empty");
-  const status = document.getElementById("status");
-  const backButton = document.getElementById("back");
-  const forwardButton = document.getElementById("forward");
-  const parentButton = document.getElementById("parent");
-  const refreshButton = document.getElementById("refresh");
-  const refreshTop = document.getElementById("refreshTop");
-
-  const kindLabel = entry => {
-    if (entry.kind === "symlink") {
-      if (entry.brokenLink) return "Broken link";
-      if (entry.linkTargetKind === "directory") return "Folder link";
-      if (entry.linkTargetKind === "file") return "File link";
-      return "Link";
-    }
-    return ({
-      directory: "Folder",
-      file: "File",
-      other: "Other"
-    }[entry.kind] || entry.kind);
-  };
-
-  const iconSvg = (entry) => {
-    const base = (() => {
-      if (entry.kind === "directory") {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5A2.5 2.5 0 0 1 5.5 3H10l2 2h6.5A2.5 2.5 0 0 1 21 7.5v9A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-11Zm2.5-.5a.5.5 0 0 0-.5.5V7h14a2.5 2.5 0 0 1 2 .99V7.5a.5.5 0 0 0-.5-.5h-7.33l-2-2H5.5ZM5 9v7.5a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5H5Z"/></svg>';
-      }
-      if (entry.kind === "symlink") {
-        const targetFolder = entry.linkTargetKind === "directory";
-        const shape = targetFolder
-          ? '<path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"/>'
-          : '<path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/>';
-        const overlay = entry.brokenLink
-          ? '<path d="M14.5 14.5 20 20M20 14.5 14.5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
-          : '<path d="M13.5 10.5h6m0 0-2.5-2.5m2.5 2.5L17 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>';
-        return '<svg viewBox="0 0 24 24" aria-hidden="true">' + shape + overlay + '</svg>';
-      }
-      if (entry.kind === "file") {
-        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/></svg>';
-      }
-      return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
-    })();
-    return base;
-  };
+  let dualPane = false;
+  let activePaneId = "left";
+  let saveTimer = null;
+  const panes = {};
 
   const formatSize = size => {
     if (size === null || size === undefined) return "";
@@ -163,23 +118,35 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
   };
 
-  function setBusy(value) {
-    state.busy = value;
-    backButton.disabled = value || state.back.length === 0;
-    forwardButton.disabled = value || state.forward.length === 0;
-    parentButton.disabled = value || !state.parentPath;
-    refreshButton.disabled = value || !state.currentPath;
-    refreshTop.disabled = value || !state.currentPath;
-    pathInput.disabled = value;
-  }
+  const kindLabel = entry => {
+    if (entry.kind === "symlink") {
+      if (entry.brokenLink) return "Broken link";
+      if (entry.linkTargetKind === "directory") return "Folder link";
+      if (entry.linkTargetKind === "file") return "File link";
+      return "Link";
+    }
+    return ({ directory: "Folder", file: "File", other: "Other" }[entry.kind] || entry.kind);
+  };
 
-  function updateButtons() {
-    backButton.disabled = state.busy || state.back.length === 0;
-    forwardButton.disabled = state.busy || state.forward.length === 0;
-    parentButton.disabled = state.busy || !state.parentPath;
-    refreshButton.disabled = state.busy || !state.currentPath;
-    refreshTop.disabled = state.busy || !state.currentPath;
-  }
+  const iconSvg = entry => {
+    if (entry.kind === "directory") {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5A2.5 2.5 0 0 1 5.5 3H10l2 2h6.5A2.5 2.5 0 0 1 21 7.5v9A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-11Zm2.5-.5a.5.5 0 0 0-.5.5V7h14a2.5 2.5 0 0 1 2 .99V7.5a.5.5 0 0 0-.5-.5h-7.33l-2-2H5.5ZM5 9v7.5a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5H5Z"/></svg>';
+    }
+    if (entry.kind === "symlink") {
+      const targetFolder = entry.linkTargetKind === "directory";
+      const shape = targetFolder
+        ? '<path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"/>'
+        : '<path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/>';
+      const overlay = entry.brokenLink
+        ? '<path d="M14.5 14.5 20 20M20 14.5 14.5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+        : '<path d="M13.5 10.5h6m0 0-2.5-2.5m2.5 2.5L17 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>';
+      return '<svg viewBox="0 0 24 24" aria-hidden="true">' + shape + overlay + '</svg>';
+    }
+    if (entry.kind === "file") {
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/></svg>';
+    }
+    return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
+  };
 
   function splitPath(path) {
     const normalized = String(path || "");
@@ -222,245 +189,387 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     return [{ label: normalized, path: normalized }];
   }
 
-  function renderBreadcrumbs() {
-    breadcrumbs.replaceChildren();
-    const parts = splitPath(state.currentPath);
+  class BrowserPane {
+    constructor(id) {
+      this.id = id;
+      this.currentPath = "";
+      this.parentPath = null;
+      this.entries = [];
+      this.back = [];
+      this.forward = [];
+      this.selectedPath = null;
+      this.busy = false;
 
-    parts.forEach((part, index) => {
-      if (index > 0) {
-        const sep = document.createElement("span");
-        sep.className = "crumb-sep";
-        sep.textContent = "›";
-        breadcrumbs.append(sep);
-      }
+      const fragment = paneTemplate.content.cloneNode(true);
+      this.element = fragment.querySelector(".pane");
+      this.element.dataset.pane = id;
+      panesHost.append(fragment);
+      this.element = panesHost.querySelector('.pane[data-pane="' + id + '"]');
 
-      const button = document.createElement("button");
-      button.type = "button";
-      button.className = "crumb";
-      button.textContent = part.label;
-      button.title = part.path;
-      button.addEventListener("click", event => {
-        event.stopPropagation();
-        navigate(part.path);
+      this.backButton = this.element.querySelector(".back");
+      this.forwardButton = this.element.querySelector(".forward");
+      this.parentButton = this.element.querySelector(".parent");
+      this.refreshButton = this.element.querySelector(".refresh");
+      this.pathWrap = this.element.querySelector(".path-wrap");
+      this.breadcrumbs = this.element.querySelector(".breadcrumbs");
+      this.pathInput = this.element.querySelector(".path-input");
+      this.status = this.element.querySelector(".status");
+      this.body = this.element.querySelector("tbody");
+      this.empty = this.element.querySelector(".empty");
+
+      this.element.addEventListener("pointerdown", () => setActivePane(this.id));
+      this.element.addEventListener("focusin", () => setActivePane(this.id));
+
+      this.backButton.addEventListener("click", () => this.goBack());
+      this.forwardButton.addEventListener("click", () => this.goForward());
+      this.parentButton.addEventListener("click", () => this.parentPath && this.navigate(this.parentPath));
+      this.refreshButton.addEventListener("click", () => this.currentPath && this.load(this.currentPath, "refresh"));
+
+      this.breadcrumbs.addEventListener("click", event => {
+        if (event.target === this.breadcrumbs) this.beginPathEdit(false);
       });
-      breadcrumbs.append(button);
-    });
-  }
-
-  function beginPathEdit(selectAll = false) {
-    if (state.busy) return;
-    breadcrumbs.hidden = true;
-    pathInput.hidden = false;
-    pathInput.value = state.currentPath;
-    pathInput.focus();
-    if (selectAll) pathInput.select();
-  }
-
-  function endPathEdit() {
-    pathInput.hidden = true;
-    breadcrumbs.hidden = false;
-    pathInput.value = state.currentPath;
-  }
-
-  function render() {
-    body.replaceChildren();
-    empty.hidden = state.entries.length !== 0;
-
-    for (const entry of state.entries) {
-      const row = document.createElement("tr");
-      row.className = "entry";
-      if (entry.path === state.selectedPath) row.classList.add("selected");
-      row.tabIndex = 0;
-
-      const nameCell = document.createElement("td");
-      const nameWrap = document.createElement("div");
-      nameWrap.className = "name-cell";
-      const icon = document.createElement("span");
-      icon.className = "icon " + entry.kind + (entry.brokenLink ? " broken" : "");
-      icon.innerHTML = iconSvg(entry);
-      const name = document.createElement("span");
-      name.className = "name";
-      name.textContent = entry.name;
-      nameWrap.append(icon, name);
-      nameCell.append(nameWrap);
-
-      const typeCell = document.createElement("td");
-      typeCell.textContent = kindLabel(entry);
-      const sizeCell = document.createElement("td");
-      sizeCell.textContent = formatSize(entry.size);
-      const modifiedCell = document.createElement("td");
-      modifiedCell.textContent = formatModified(entry.modifiedMs);
-
-      row.append(nameCell, typeCell, sizeCell, modifiedCell);
-
-      row.addEventListener("click", () => {
-        state.selectedPath = entry.path;
-        render();
-      });
-
-      const canNavigate = entry.kind === "directory"
-        || (entry.kind === "symlink" && entry.linkTargetKind === "directory" && !entry.brokenLink);
-
-      row.addEventListener("dblclick", () => {
-        if (canNavigate) navigate(entry.path);
-      });
-
-      row.addEventListener("keydown", event => {
-        if (event.key === "Enter" && canNavigate) {
+      this.breadcrumbs.addEventListener("keydown", event => {
+        if (event.key === "Enter" || event.key === "F2") {
           event.preventDefault();
-          navigate(entry.path);
+          this.beginPathEdit(true);
         }
       });
-
-      body.append(row);
+      this.pathWrap.addEventListener("dblclick", event => {
+        if (!this.pathInput.hidden) return;
+        if (event.target === this.breadcrumbs || event.target === this.pathWrap) this.beginPathEdit(true);
+      });
+      this.pathInput.addEventListener("keydown", event => {
+        if (event.key === "Enter") {
+          event.preventDefault();
+          const target = this.pathInput.value.trim();
+          if (target) {
+            this.endPathEdit();
+            this.navigate(target);
+          }
+        } else if (event.key === "Escape") {
+          event.preventDefault();
+          this.endPathEdit();
+          this.breadcrumbs.focus();
+        }
+      });
+      this.pathInput.addEventListener("blur", () => this.endPathEdit());
+      this.updateButtons();
     }
 
-    status.classList.remove("error");
-    status.textContent = `${state.entries.length} item${state.entries.length === 1 ? "" : "s"}`;
-    updateButtons();
-  }
+    setHidden(hidden) {
+      this.element.hidden = hidden;
+    }
 
-  async function load(path = null, historyMode = "push") {
-    if (state.busy) return;
-    const previousPath = state.currentPath;
-    setBusy(true);
-    status.classList.remove("error");
-    status.textContent = "Loading…";
+    setBusy(value) {
+      this.busy = value;
+      this.pathInput.disabled = value;
+      this.updateButtons();
+    }
 
-    try {
-      const result = path === null
-        ? await request("fs.initial")
-        : await request("fs.list", { path });
+    updateButtons() {
+      this.backButton.disabled = this.busy || this.back.length === 0;
+      this.forwardButton.disabled = this.busy || this.forward.length === 0;
+      this.parentButton.disabled = this.busy || !this.parentPath;
+      this.refreshButton.disabled = this.busy || !this.currentPath;
+    }
 
-      if (historyMode === "push" && previousPath && previousPath !== result.path) {
-        state.back.push(previousPath);
-        state.forward = [];
+    beginPathEdit(selectAll = false) {
+      if (this.busy) return;
+      setActivePane(this.id);
+      this.breadcrumbs.hidden = true;
+      this.pathInput.hidden = false;
+      this.pathInput.value = this.currentPath;
+      this.pathInput.focus();
+      if (selectAll) this.pathInput.select();
+    }
+
+    endPathEdit() {
+      this.pathInput.hidden = true;
+      this.breadcrumbs.hidden = false;
+      this.pathInput.value = this.currentPath;
+    }
+
+    renderBreadcrumbs() {
+      this.breadcrumbs.replaceChildren();
+      const parts = splitPath(this.currentPath);
+      parts.forEach((part, index) => {
+        if (index > 0) {
+          const sep = document.createElement("span");
+          sep.className = "crumb-sep";
+          sep.textContent = "›";
+          this.breadcrumbs.append(sep);
+        }
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "crumb";
+        button.textContent = part.label;
+        button.title = part.path;
+        button.addEventListener("click", event => {
+          event.stopPropagation();
+          setActivePane(this.id);
+          this.navigate(part.path);
+        });
+        this.breadcrumbs.append(button);
+      });
+    }
+
+    render() {
+      this.body.replaceChildren();
+      this.empty.hidden = this.entries.length !== 0;
+
+      for (const entry of this.entries) {
+        const row = document.createElement("tr");
+        row.className = "entry";
+        if (entry.path === this.selectedPath) row.classList.add("selected");
+        row.tabIndex = 0;
+
+        const nameCell = document.createElement("td");
+        const nameWrap = document.createElement("div");
+        nameWrap.className = "name-cell";
+        const icon = document.createElement("span");
+        icon.className = "icon " + entry.kind + (entry.brokenLink ? " broken" : "");
+        icon.innerHTML = iconSvg(entry);
+        const name = document.createElement("span");
+        name.className = "name";
+        name.textContent = entry.name;
+        nameWrap.append(icon, name);
+        nameCell.append(nameWrap);
+
+        const typeCell = document.createElement("td");
+        typeCell.textContent = kindLabel(entry);
+        const sizeCell = document.createElement("td");
+        sizeCell.textContent = formatSize(entry.size);
+        const modifiedCell = document.createElement("td");
+        modifiedCell.textContent = formatModified(entry.modifiedMs);
+        row.append(nameCell, typeCell, sizeCell, modifiedCell);
+
+        row.addEventListener("click", () => {
+          setActivePane(this.id);
+          this.selectedPath = entry.path;
+          this.render();
+        });
+
+        const canNavigate = entry.kind === "directory"
+          || (entry.kind === "symlink" && entry.linkTargetKind === "directory" && !entry.brokenLink);
+
+        row.addEventListener("dblclick", () => {
+          if (canNavigate) this.navigate(entry.path);
+        });
+        row.addEventListener("keydown", event => {
+          if (event.key === "Enter" && canNavigate) {
+            event.preventDefault();
+            this.navigate(entry.path);
+          }
+        });
+
+        this.body.append(row);
       }
 
-      state.currentPath = result.path;
-      state.parentPath = result.parent || null;
-      state.entries = Array.isArray(result.entries) ? result.entries : [];
-      state.selectedPath = null;
-      pathInput.value = state.currentPath;
-      renderBreadcrumbs();
-      render();
-    } catch (error) {
-      status.classList.add("error");
-      status.textContent = String(error);
-      pathInput.value = state.currentPath || path || "";
-      if (!pathInput.hidden) pathInput.focus();
-    } finally {
-      setBusy(false);
-      updateButtons();
+      this.status.classList.remove("error");
+      this.status.textContent = `${this.entries.length} item${this.entries.length === 1 ? "" : "s"}`;
+      this.updateButtons();
     }
-  }
 
-  function navigate(path) {
-    if (!path || path === state.currentPath) return;
-    load(path, "push");
-  }
+    async load(path = null, historyMode = "push", fallbackToInitial = false) {
+      if (this.busy) return false;
+      const previousPath = this.currentPath;
+      this.setBusy(true);
+      this.status.classList.remove("error");
+      this.status.textContent = "Loading…";
 
-  async function goBack() {
-    if (state.busy || state.back.length === 0) return;
-    const target = state.back.pop();
-    if (state.currentPath) state.forward.push(state.currentPath);
-    await load(target, "history");
-  }
+      try {
+        const result = path === null
+          ? await request("fs.initial")
+          : await request("fs.list", { path });
 
-  async function goForward() {
-    if (state.busy || state.forward.length === 0) return;
-    const target = state.forward.pop();
-    if (state.currentPath) state.back.push(state.currentPath);
-    await load(target, "history");
-  }
+        if (historyMode === "push" && previousPath && previousPath !== result.path) {
+          this.back.push(previousPath);
+          this.forward = [];
+        }
 
-  backButton.addEventListener("click", goBack);
-  forwardButton.addEventListener("click", goForward);
-  parentButton.addEventListener("click", () => state.parentPath && navigate(state.parentPath));
-  refreshButton.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
-  refreshTop.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
-
-  breadcrumbs.addEventListener("click", event => {
-    if (event.target === breadcrumbs) beginPathEdit(false);
-  });
-
-  breadcrumbs.addEventListener("keydown", event => {
-    if (event.key === "Enter" || event.key === "F2") {
-      event.preventDefault();
-      beginPathEdit(true);
-    }
-  });
-
-  pathWrap.addEventListener("dblclick", event => {
-    if (!pathInput.hidden) return;
-    if (event.target === breadcrumbs || event.target === pathWrap) beginPathEdit(true);
-  });
-
-  pathInput.addEventListener("keydown", event => {
-    if (event.key === "Enter") {
-      event.preventDefault();
-      const target = pathInput.value.trim();
-      if (target) {
-        endPathEdit();
-        navigate(target);
+        this.currentPath = result.path;
+        this.parentPath = result.parent || null;
+        this.entries = Array.isArray(result.entries) ? result.entries : [];
+        this.selectedPath = null;
+        this.pathInput.value = this.currentPath;
+        this.renderBreadcrumbs();
+        this.render();
+        scheduleSave();
+        return true;
+      } catch (error) {
+        if (fallbackToInitial && path !== null) {
+          this.setBusy(false);
+          return this.load(null, "initial", false);
+        }
+        this.status.classList.add("error");
+        this.status.textContent = String(error);
+        this.pathInput.value = this.currentPath || path || "";
+        if (!this.pathInput.hidden) this.pathInput.focus();
+        return false;
+      } finally {
+        this.setBusy(false);
+        this.updateButtons();
       }
-    } else if (event.key === "Escape") {
-      event.preventDefault();
-      endPathEdit();
-      breadcrumbs.focus();
     }
-  });
 
-  pathInput.addEventListener("blur", () => {
-    endPathEdit();
+    navigate(path) {
+      if (!path || path === this.currentPath) return;
+      this.load(path, "push");
+    }
+
+    async goBack() {
+      if (this.busy || this.back.length === 0) return;
+      const target = this.back.pop();
+      if (this.currentPath) this.forward.push(this.currentPath);
+      const ok = await this.load(target, "history");
+      if (!ok) {
+        this.forward.pop();
+        this.back.push(target);
+      }
+      this.updateButtons();
+    }
+
+    async goForward() {
+      if (this.busy || this.forward.length === 0) return;
+      const target = this.forward.pop();
+      if (this.currentPath) this.back.push(this.currentPath);
+      const ok = await this.load(target, "history");
+      if (!ok) {
+        this.back.pop();
+        this.forward.push(target);
+      }
+      this.updateButtons();
+    }
+  }
+
+  function setActivePane(id) {
+    if (id === "right" && !dualPane) id = "left";
+    activePaneId = id;
+    for (const pane of Object.values(panes)) {
+      pane.element.classList.toggle("active", pane.id === activePaneId);
+    }
+    scheduleSave();
+  }
+
+  function activePane() {
+    return panes[activePaneId] || panes.left;
+  }
+
+  function applyLayout() {
+    panesHost.classList.toggle("dual", dualPane);
+    panes.right.setHidden(!dualPane);
+    dualToggle.setAttribute("aria-pressed", String(dualPane));
+    dualToggle.textContent = dualPane ? "Single Pane" : "Dual Pane";
+    if (!dualPane && activePaneId === "right") setActivePane("left");
+  }
+
+  function uiState() {
+    return {
+      dualPane,
+      leftPath: panes.left.currentPath || null,
+      rightPath: panes.right.currentPath || null,
+      activePane: activePaneId
+    };
+  }
+
+  function scheduleSave() {
+    if (saveTimer !== null) clearTimeout(saveTimer);
+    saveTimer = setTimeout(async () => {
+      saveTimer = null;
+      try {
+        await request("ui.state.set", uiState());
+      } catch (error) {
+        console.warn("File Manager could not persist UI state:", error);
+      }
+    }, 150);
+  }
+
+  dualToggle.addEventListener("click", async () => {
+    dualPane = !dualPane;
+    if (dualPane && !panes.right.currentPath) {
+      await panes.right.load(panes.left.currentPath || null, "initial", true);
+    }
+    applyLayout();
+    scheduleSave();
   });
 
   window.addEventListener("mousedown", event => {
     if (event.button === 3) {
       event.preventDefault();
-      goBack();
+      activePane().goBack();
       return;
     }
     if (event.button === 4) {
       event.preventDefault();
-      goForward();
+      activePane().goForward();
     }
   }, { capture: true });
 
   window.addEventListener("auxclick", event => {
-    if (event.button === 3 || event.button === 4) {
-      event.preventDefault();
-    }
+    if (event.button === 3 || event.button === 4) event.preventDefault();
   }, { capture: true });
 
   window.addEventListener("keydown", event => {
+    const pane = activePane();
     if (event.ctrlKey && event.key.toLowerCase() === "l") {
       event.preventDefault();
-      beginPathEdit(true);
+      pane.beginPathEdit(true);
       return;
     }
     if (event.altKey && event.key === "ArrowLeft") {
       event.preventDefault();
-      goBack();
+      pane.goBack();
       return;
     }
     if (event.altKey && event.key === "ArrowRight") {
       event.preventDefault();
-      goForward();
+      pane.goForward();
       return;
     }
     if (event.altKey && event.key === "ArrowUp") {
       event.preventDefault();
-      if (state.parentPath) navigate(state.parentPath);
+      if (pane.parentPath) pane.navigate(pane.parentPath);
       return;
     }
     if (event.key === "F5") {
       event.preventDefault();
-      if (state.currentPath) load(state.currentPath, "refresh");
+      if (pane.currentPath) pane.load(pane.currentPath, "refresh");
     }
   });
 
-  load(null, "initial");
+  async function initialize() {
+    panes.left = new BrowserPane("left");
+    panes.right = new BrowserPane("right");
+
+    let stored = null;
+    try {
+      stored = await request("ui.state.get");
+    } catch (error) {
+      console.warn("File Manager could not restore UI state:", error);
+    }
+
+    dualPane = Boolean(stored && stored.dualPane);
+    activePaneId = stored && stored.activePane === "right" ? "right" : "left";
+    applyLayout();
+    setActivePane(activePaneId);
+
+    const leftPath = stored && stored.leftPath ? stored.leftPath : null;
+    await panes.left.load(leftPath, "initial", true);
+
+    const rightPath = stored && stored.rightPath ? stored.rightPath : panes.left.currentPath;
+    if (dualPane) {
+      await panes.right.load(rightPath || null, "initial", true);
+    } else if (rightPath) {
+      panes.right.currentPath = rightPath;
+      panes.right.pathInput.value = rightPath;
+    }
+
+    applyLayout();
+    setActivePane(activePaneId);
+    scheduleSave();
+  }
+
+  initialize();
 })();
 </script>
 </body>
