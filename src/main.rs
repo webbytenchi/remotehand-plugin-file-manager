@@ -155,7 +155,7 @@ struct JobSnapshot {
     id: u64,
     kind: String,
     state: String,
-    source: String,
+    sources: Vec<String>,
     destination: String,
     bytes_total: u64,
     bytes_done: u64,
@@ -177,13 +177,13 @@ struct JobManager {
 }
 
 impl JobManager {
-    fn create(&self, kind: &str, source: &Path, destination: &Path) -> Result<Arc<JobControl>, String> {
+    fn create(&self, kind: &str, sources: &[PathBuf], destination: &Path) -> Result<Arc<JobControl>, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1);
         let snapshot = JobSnapshot {
             id,
             kind: kind.to_string(),
             state: "queued".to_string(),
-            source: path_text(source),
+            sources: sources.iter().map(|source| path_text(source)).collect(),
             destination: path_text(destination),
             bytes_total: 0,
             bytes_done: 0,
@@ -333,6 +333,23 @@ fn recycle_entry(path: &Path) -> Result<Value, String> {
     trash::delete(path)
         .map_err(|error| format!("cannot move {} to Recycle Bin/Trash: {error}", path_text(path)))?;
     Ok(json!({ "deleted": true }))
+}
+
+fn recycle_entries(paths: &[String]) -> Result<Value, String> {
+    if paths.is_empty() {
+        return Err("at least one path is required".to_string());
+    }
+    if paths.len() > 10_000 {
+        return Err("too many items selected".to_string());
+    }
+    let resolved: Vec<PathBuf> = paths
+        .iter()
+        .map(|path| resolve_entry_without_following(Path::new(path)))
+        .collect::<Result<_, _>>()?;
+    for path in &resolved {
+        recycle_entry(path)?;
+    }
+    Ok(json!({ "deleted": resolved.len() }))
 }
 
 fn scan_tree(path: &Path, totals: &mut (u64, u64), cancel: &AtomicBool) -> Result<(), String> {
@@ -504,14 +521,38 @@ fn validate_job_paths(source: &Path, destination_dir: &Path) -> Result<(PathBuf,
 fn start_job(
     manager: Arc<JobManager>,
     kind: &str,
-    source: &Path,
+    source_paths: &[String],
     destination_dir: &Path,
 ) -> Result<Value, String> {
     if kind != "copy" && kind != "move" {
         return Err("job kind must be copy or move".to_string());
     }
-    let (source, destination) = validate_job_paths(source, destination_dir)?;
-    let control = manager.create(kind, &source, &destination)?;
+    if source_paths.is_empty() {
+        return Err("at least one source is required".to_string());
+    }
+    if source_paths.len() > 10_000 {
+        return Err("too many items selected".to_string());
+    }
+
+    let destination_dir = ensure_regular_parent(destination_dir)?;
+    let mut sources = Vec::with_capacity(source_paths.len());
+    let mut destinations = Vec::with_capacity(source_paths.len());
+    let mut seen_destinations = std::collections::BTreeSet::new();
+
+    for source_path in source_paths {
+        let (source, destination) = validate_job_paths(Path::new(source_path), &destination_dir)?;
+        let destination_key = destination.to_string_lossy().to_ascii_lowercase();
+        if !seen_destinations.insert(destination_key) {
+            return Err(format!(
+                "multiple selected items would use the same destination name: {}",
+                path_text(&destination)
+            ));
+        }
+        sources.push(source);
+        destinations.push(destination);
+    }
+
+    let control = manager.create(kind, &sources, &destination_dir)?;
     let id = control
         .snapshot
         .lock()
@@ -531,7 +572,9 @@ fn start_job(
             }
 
             let mut totals = (0u64, 0u64);
-            scan_tree(&source, &mut totals, &control_for_thread.cancel)?;
+            for source in &sources {
+                scan_tree(source, &mut totals, &control_for_thread.cancel)?;
+            }
             {
                 let mut snapshot = control_for_thread
                     .snapshot
@@ -542,37 +585,35 @@ fn start_job(
                 snapshot.state = "running".to_string();
             }
 
-            if control_for_thread.cancel.load(Ordering::Relaxed) {
-                return Err("cancelled".to_string());
-            }
-
-            if kind_owned == "move" {
-                match fs::rename(&source, &destination) {
-                    Ok(()) => {
-                        let mut snapshot = control_for_thread
-                            .snapshot
-                            .lock()
-                            .map_err(|_| "job state lock poisoned".to_string())?;
-                        snapshot.bytes_done = snapshot.bytes_total;
-                        snapshot.items_done = snapshot.items_total;
-                        return Ok(());
-                    }
-                    Err(_) => {}
-                }
-            }
-
-            let copy_result = copy_tree(&source, &destination, &control_for_thread);
-            if let Err(error) = copy_result {
-                cleanup_partial_destination(&destination);
-                return Err(error);
-            }
-
-            if kind_owned == "move" {
+            for (source, destination) in sources.iter().zip(destinations.iter()) {
                 if control_for_thread.cancel.load(Ordering::Relaxed) {
-                    cleanup_partial_destination(&destination);
                     return Err("cancelled".to_string());
                 }
-                remove_tree_no_follow(&source)?;
+
+                if kind_owned == "move" {
+                    if fs::rename(source, destination).is_ok() {
+                        let item_totals = {
+                            let mut totals = (0u64, 0u64);
+                            scan_tree(destination, &mut totals, &AtomicBool::new(false))?;
+                            totals
+                        };
+                        note_progress(&control_for_thread, item_totals.0, item_totals.1)?;
+                        continue;
+                    }
+                }
+
+                if let Err(error) = copy_tree(source, destination, &control_for_thread) {
+                    cleanup_partial_destination(destination);
+                    return Err(error);
+                }
+
+                if kind_owned == "move" {
+                    if control_for_thread.cancel.load(Ordering::Relaxed) {
+                        cleanup_partial_destination(destination);
+                        return Err("cancelled".to_string());
+                    }
+                    remove_tree_no_follow(source)?;
+                }
             }
             Ok(())
         })();
@@ -878,6 +919,13 @@ fn dispatch(
                 .map_err(|error| format!("invalid delete request: {error}"))?;
             recycle_entry(Path::new(&params.path))
         }
+        "fs.deleteMany" => {
+            #[derive(Deserialize)]
+            struct Params { paths: Vec<String> }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid multi-delete request: {error}"))?;
+            recycle_entries(&params.paths)
+        }
         "fs.properties" => {
             #[derive(Deserialize)]
             struct Params { path: String }
@@ -888,13 +936,13 @@ fn dispatch(
         "fs.job.start" => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
-            struct Params { kind: String, source: String, destination_dir: String }
+            struct Params { kind: String, sources: Vec<String>, destination_dir: String }
             let params: Params = serde_json::from_value(request.params.clone())
                 .map_err(|error| format!("invalid file-operation request: {error}"))?;
             start_job(
                 Arc::clone(jobs),
                 &params.kind,
-                Path::new(&params.source),
+                &params.sources,
                 Path::new(&params.destination_dir),
             )
         }
@@ -1087,6 +1135,29 @@ mod tests {
     }
 
     #[test]
+    fn multi_job_rejects_destination_conflict_before_starting() {
+        let root = temp_dir("multi-conflict");
+        let source_a = root.join("a");
+        let source_b = root.join("b");
+        let destination = root.join("dest");
+        fs::create_dir(&source_a).unwrap();
+        fs::create_dir(&source_b).unwrap();
+        fs::create_dir(&destination).unwrap();
+        fs::write(source_a.join("same.txt"), b"a").unwrap();
+        fs::write(source_b.join("same.txt"), b"b").unwrap();
+
+        let manager = Arc::new(JobManager::default());
+        let sources = vec![
+            path_text(&source_a.join("same.txt")),
+            path_text(&source_b.join("same.txt")),
+        ];
+        let error = start_job(manager, "copy", &sources, &destination).unwrap_err();
+        assert!(error.contains("same destination name"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn copy_tree_copies_files_without_following_directory_layout_errors() {
         let root = temp_dir("copy-tree");
         let source = root.join("source");
@@ -1099,7 +1170,7 @@ mod tests {
                 id: 1,
                 kind: "copy".into(),
                 state: "running".into(),
-                source: path_text(&source),
+                sources: vec![path_text(&source)],
                 destination: path_text(&destination),
                 bytes_total: 5,
                 bytes_done: 0,
