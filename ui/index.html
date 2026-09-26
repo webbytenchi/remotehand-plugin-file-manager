@@ -772,8 +772,8 @@ tr.entry.cut{opacity:.55}
         const sourceLabel = sourceCount === 1 ? basename(job.sources[0]) : `${sourceCount} selected items`;
         jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${sourceLabel}`;
         jobmeta.textContent = job.state === "scanning"
-          ? "Scanning…"
-          : `${job.state} · ${itemsDone}/${itemsTotal || "?"} items`;
+          ? `Scanning… · ${itemsTotal.toLocaleString()} item${itemsTotal === 1 ? "" : "s"} · ${formatSize(total)} discovered`
+          : `${job.state} · ${itemsDone.toLocaleString()}/${itemsTotal || "?"} items`;
         jobCancel.disabled = !job.cancellable || !["queued","scanning","running"].includes(job.state);
 
         if (["completed","failed","cancelled"].includes(job.state)) {
