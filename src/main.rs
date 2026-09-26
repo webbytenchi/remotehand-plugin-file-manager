@@ -533,6 +533,18 @@ mod tests {
         fs::remove_dir_all(root).unwrap();
     }
 
+    #[test]
+    fn ui_state_normalizes_active_pane() {
+        let state = normalize_ui_state(UiState {
+            dual_pane: true,
+            left_path: Some("left".into()),
+            right_path: Some("right".into()),
+            active_pane: "unexpected".into(),
+        });
+        assert_eq!(state.active_pane, "left");
+        assert!(state.dual_pane);
+    }
+
     #[cfg(unix)]
     #[test]
     fn list_directory_reports_symlink_target_kind() {
