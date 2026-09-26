@@ -10,6 +10,7 @@ const PLUGIN_ID: &str = "remotehand.file-manager";
 const PLUGIN_VERSION: &str = "0.1.0";
 const API_VERSION: u32 = 1;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
+const UI_STATE_KEY: &str = "ui-state-v1";
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -28,6 +29,8 @@ struct HostReady {
     message_type: String,
     plugin_id: String,
     api_version: u32,
+    #[serde(default)]
+    granted_permissions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -50,6 +53,71 @@ struct PluginResponse {
     ok: bool,
     result: Value,
     error: String,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PluginHostRequest<'a> {
+    #[serde(rename = "type")]
+    message_type: &'static str,
+    request_id: u64,
+    method: &'a str,
+    params: Value,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct HostResponse {
+    #[serde(rename = "type")]
+    message_type: String,
+    request_id: u64,
+    #[serde(default)]
+    ok: bool,
+    #[serde(default)]
+    result: Value,
+    #[serde(default)]
+    error: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct UiState {
+    #[serde(default)]
+    dual_pane: bool,
+    #[serde(default)]
+    left_path: Option<String>,
+    #[serde(default)]
+    right_path: Option<String>,
+    #[serde(default = "default_active_pane")]
+    active_pane: String,
+}
+
+fn default_active_pane() -> String {
+    "left".to_string()
+}
+
+impl Default for UiState {
+    fn default() -> Self {
+        Self {
+            dual_pane: false,
+            left_path: None,
+            right_path: None,
+            active_pane: default_active_pane(),
+        }
+    }
+}
+
+fn normalize_ui_state(mut state: UiState) -> UiState {
+    if state.active_pane != "left" && state.active_pane != "right" {
+        state.active_pane = default_active_pane();
+    }
+    state.left_path = state
+        .left_path
+        .and_then(|path| (!path.trim().is_empty() && path.len() <= 32768).then_some(path));
+    state.right_path = state
+        .right_path
+        .and_then(|path| (!path.trim().is_empty() && path.len() <= 32768).then_some(path));
+    state
 }
 
 #[derive(Debug, Serialize, PartialEq, Eq)]
@@ -107,6 +175,51 @@ fn read_frame<R: Read>(reader: &mut R) -> Result<Option<Vec<u8>>, String> {
         .map_err(|error| error.to_string())?;
     Ok(Some(payload))
 }
+
+fn call_host<R: Read, W: Write>(
+    reader: &mut R,
+    writer: &mut W,
+    next_request_id: &mut u64,
+    method: &str,
+    params: Value,
+) -> Result<Value, String> {
+    *next_request_id = next_request_id.wrapping_add(1).max(1);
+    let request_id = *next_request_id;
+    write_frame(
+        writer,
+        &PluginHostRequest {
+            message_type: "plugin.request",
+            request_id,
+            method,
+            params,
+        },
+    )?;
+
+    let payload = read_frame(reader)?
+        .ok_or_else(|| "host closed stream while awaiting host.response".to_string())?;
+    let response: HostResponse = serde_json::from_slice(&payload)
+        .map_err(|error| format!("invalid host.response: {error}"))?;
+    if response.message_type != "host.response" {
+        return Err(format!(
+            "unexpected Plugin API v1 message type while awaiting host.response: {}",
+            response.message_type
+        ));
+    }
+    if response.request_id != request_id {
+        return Err(format!(
+            "host.response requestId mismatch: expected {request_id}, got {}",
+            response.request_id
+        ));
+    }
+    if response.ok {
+        Ok(response.result)
+    } else if response.error.trim().is_empty() {
+        Err(format!("host API method {method} failed"))
+    } else {
+        Err(response.error)
+    }
+}
+
 
 fn initial_path() -> PathBuf {
     #[cfg(windows)]
@@ -237,7 +350,10 @@ fn list_directory(path: &Path) -> Result<Value, String> {
     }))
 }
 
-fn dispatch(request: &HostRequest) -> Result<Value, String> {
+fn dispatch(
+    request: &HostRequest,
+    host_call: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+) -> Result<Value, String> {
     match request.method.as_str() {
         "runtime.ping" => Ok(json!({
             "pluginId": PLUGIN_ID,
@@ -245,6 +361,28 @@ fn dispatch(request: &HostRequest) -> Result<Value, String> {
             "apiVersion": API_VERSION,
             "status": "ok"
         })),
+        "ui.state.get" => {
+            let result = host_call("storage.get", json!({ "key": UI_STATE_KEY }))?;
+            let state = match result.get("value") {
+                None | Some(Value::Null) => UiState::default(),
+                Some(value) => {
+                    let parsed: UiState = serde_json::from_value(value.clone())
+                        .map_err(|error| format!("invalid stored File Manager UI state: {error}"))?;
+                    normalize_ui_state(parsed)
+                }
+            };
+            Ok(serde_json::to_value(state).unwrap_or_else(|_| json!({})))
+        }
+        "ui.state.set" => {
+            let parsed: UiState = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid File Manager UI state: {error}"))?;
+            let state = normalize_ui_state(parsed);
+            host_call(
+                "storage.set",
+                json!({ "key": UI_STATE_KEY, "value": state }),
+            )?;
+            Ok(json!({ "stored": true }))
+        }
         "fs.initial" => list_directory(&initial_path()),
         "fs.list" => {
             #[derive(Deserialize)]
@@ -289,6 +427,8 @@ fn run() -> Result<(), String> {
         return Err("RemoteHand rejected Plugin API v1 startup contract".to_string());
     }
 
+    let mut next_host_request_id = 0u64;
+
     while let Some(payload) = read_frame(&mut stdin)? {
         let request: HostRequest = serde_json::from_slice(&payload)
             .map_err(|error| format!("invalid host request: {error}"))?;
@@ -300,7 +440,17 @@ fn run() -> Result<(), String> {
             ));
         }
 
-        let (ok, result, error) = match dispatch(&request) {
+        let mut host_call = |method: &str, params: Value| {
+            call_host(
+                &mut stdin,
+                &mut stdout,
+                &mut next_host_request_id,
+                method,
+                params,
+            )
+        };
+
+        let (ok, result, error) = match dispatch(&request, &mut host_call) {
             Ok(result) => (true, result, String::new()),
             Err(error) => (false, Value::Null, error),
         };
