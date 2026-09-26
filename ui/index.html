@@ -20,8 +20,14 @@ button:disabled{opacity:.45;cursor:default}
 .nav{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
 .nav button{min-width:34px;padding:6px 8px}
 .path-wrap{min-width:0;flex:1}
+.breadcrumbs{min-height:32px;width:100%;display:flex;align-items:center;gap:2px;overflow:hidden;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);border-radius:7px;padding:3px 5px;outline:none}
+.breadcrumbs:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
+.crumb{border:0;background:transparent;color:var(--remotehand-text,#eef3f8);padding:4px 6px;border-radius:5px;min-width:0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.crumb:hover{background:var(--remotehand-button-hover,#2a3542)}
+.crumb-sep{color:var(--remotehand-muted-text,#93a1b2);padding:0 1px;flex:0 0 auto}
 .path-input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:7px 9px;outline:none;user-select:text}
 .path-input:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
+[hidden]{display:none!important}
 .status{padding:7px 10px;color:var(--remotehand-muted-text,#93a1b2);font-size:12px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
 .error{color:var(--remotehand-danger-text,#ffc6c6)}
 .table-wrap{min-height:0;flex:1;overflow:auto}
@@ -53,8 +59,9 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       <button id="forward" type="button" title="Forward (Alt+Right)">→</button>
       <button id="parent" type="button" title="Parent (Alt+Up)">↑</button>
       <button id="refresh" type="button" title="Refresh (F5)">⟳</button>
-      <div class="path-wrap">
-        <input id="path" class="path-input" autocomplete="off" spellcheck="false" aria-label="Current path">
+      <div id="pathWrap" class="path-wrap">
+        <div id="breadcrumbs" class="breadcrumbs" tabindex="0" aria-label="Current path"></div>
+        <input id="path" class="path-input" autocomplete="off" spellcheck="false" aria-label="Edit current path" hidden>
       </div>
     </div>
     <div id="status" class="status">Loading…</div>
@@ -84,6 +91,8 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     busy: false
   };
 
+  const pathWrap = document.getElementById("pathWrap");
+  const breadcrumbs = document.getElementById("breadcrumbs");
   const pathInput = document.getElementById("path");
   const body = document.getElementById("body");
   const empty = document.getElementById("empty");
@@ -143,6 +152,87 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     parentButton.disabled = state.busy || !state.parentPath;
     refreshButton.disabled = state.busy || !state.currentPath;
     refreshTop.disabled = state.busy || !state.currentPath;
+  }
+
+  function splitPath(path) {
+    const normalized = String(path || "");
+    if (!normalized) return [];
+
+    if (/^[A-Za-z]:\\/.test(normalized)) {
+      const drive = normalized.slice(0, 3);
+      const rest = normalized.slice(3).split("\\").filter(Boolean);
+      const parts = [{ label: drive, path: drive }];
+      let current = drive.replace(/\\$/, "");
+      for (const segment of rest) {
+        current += "\\" + segment;
+        parts.push({ label: segment, path: current });
+      }
+      return parts;
+    }
+
+    if (normalized.startsWith("\\\\")) {
+      const segments = normalized.slice(2).split("\\").filter(Boolean);
+      const parts = [];
+      let current = "\\\\";
+      for (const segment of segments) {
+        current += (current === "\\\\" ? "" : "\\") + segment;
+        parts.push({ label: segment, path: current });
+      }
+      return parts;
+    }
+
+    if (normalized.startsWith("/")) {
+      const segments = normalized.split("/").filter(Boolean);
+      const parts = [{ label: "/", path: "/" }];
+      let current = "";
+      for (const segment of segments) {
+        current += "/" + segment;
+        parts.push({ label: segment, path: current });
+      }
+      return parts;
+    }
+
+    return [{ label: normalized, path: normalized }];
+  }
+
+  function renderBreadcrumbs() {
+    breadcrumbs.replaceChildren();
+    const parts = splitPath(state.currentPath);
+
+    parts.forEach((part, index) => {
+      if (index > 0) {
+        const sep = document.createElement("span");
+        sep.className = "crumb-sep";
+        sep.textContent = "›";
+        breadcrumbs.append(sep);
+      }
+
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "crumb";
+      button.textContent = part.label;
+      button.title = part.path;
+      button.addEventListener("click", event => {
+        event.stopPropagation();
+        navigate(part.path);
+      });
+      breadcrumbs.append(button);
+    });
+  }
+
+  function beginPathEdit(selectAll = false) {
+    if (state.busy) return;
+    breadcrumbs.hidden = true;
+    pathInput.hidden = false;
+    pathInput.value = state.currentPath;
+    pathInput.focus();
+    if (selectAll) pathInput.select();
+  }
+
+  function endPathEdit() {
+    pathInput.hidden = true;
+    breadcrumbs.hidden = false;
+    pathInput.value = state.currentPath;
   }
 
   function render() {
@@ -222,11 +312,13 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       state.entries = Array.isArray(result.entries) ? result.entries : [];
       state.selectedPath = null;
       pathInput.value = state.currentPath;
+      renderBreadcrumbs();
       render();
     } catch (error) {
       status.classList.add("error");
       status.textContent = String(error);
       pathInput.value = state.currentPath || path || "";
+      if (!pathInput.hidden) pathInput.focus();
     } finally {
       setBusy(false);
       updateButtons();
@@ -258,15 +350,36 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   refreshButton.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
   refreshTop.addEventListener("click", () => state.currentPath && load(state.currentPath, "refresh"));
 
+  breadcrumbs.addEventListener("click", event => {
+    if (event.target === breadcrumbs) beginPathEdit(false);
+  });
+
+  breadcrumbs.addEventListener("keydown", event => {
+    if (event.key === "Enter" || event.key === "F2") {
+      event.preventDefault();
+      beginPathEdit(true);
+    }
+  });
+
+  pathWrap.addEventListener("dblclick", event => {
+    if (!pathInput.hidden) return;
+    if (event.target === breadcrumbs || event.target === pathWrap) beginPathEdit(true);
+  });
+
   pathInput.addEventListener("keydown", event => {
     if (event.key === "Enter") {
       event.preventDefault();
       const target = pathInput.value.trim();
       if (target) navigate(target);
     } else if (event.key === "Escape") {
-      pathInput.value = state.currentPath;
-      pathInput.blur();
+      event.preventDefault();
+      endPathEdit();
+      breadcrumbs.focus();
     }
+  });
+
+  pathInput.addEventListener("blur", () => {
+    endPathEdit();
   });
 
   window.addEventListener("mousedown", event => {
@@ -290,8 +403,7 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   window.addEventListener("keydown", event => {
     if (event.ctrlKey && event.key.toLowerCase() === "l") {
       event.preventDefault();
-      pathInput.focus();
-      pathInput.select();
+      beginPathEdit(true);
       return;
     }
     if (event.altKey && event.key === "ArrowLeft") {
