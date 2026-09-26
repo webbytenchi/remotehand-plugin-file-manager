@@ -863,7 +863,7 @@ tr.entry.cut{opacity:.55}
     if (!ok) return;
     try {
       const paths = entries.map(entry => entry.path);
-      await request("fs.deleteMany", { paths });
+      await request("fs.delete-many", { paths });
       if (clipboard && clipboard.paths.some(path => paths.includes(path))) clipboard = null;
       await refreshAllPanes();
     } catch (error) {
