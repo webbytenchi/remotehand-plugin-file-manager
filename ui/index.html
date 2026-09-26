@@ -269,6 +269,24 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     }
   });
 
+  window.addEventListener("mousedown", event => {
+    if (event.button === 3) {
+      event.preventDefault();
+      goBack();
+      return;
+    }
+    if (event.button === 4) {
+      event.preventDefault();
+      goForward();
+    }
+  }, { capture: true });
+
+  window.addEventListener("auxclick", event => {
+    if (event.button === 3 || event.button === 4) {
+      event.preventDefault();
+    }
+  }, { capture: true });
+
   window.addEventListener("keydown", event => {
     if (event.ctrlKey && event.key.toLowerCase() === "l") {
       event.preventDefault();
