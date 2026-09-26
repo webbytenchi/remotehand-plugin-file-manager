@@ -370,7 +370,10 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     if (event.key === "Enter") {
       event.preventDefault();
       const target = pathInput.value.trim();
-      if (target) navigate(target);
+      if (target) {
+        endPathEdit();
+        navigate(target);
+      }
     } else if (event.key === "Escape") {
       event.preventDefault();
       endPathEdit();
