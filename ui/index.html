@@ -1032,6 +1032,20 @@ tr.entry.cut{opacity:.55}
 
     applyLayout();
     setActivePane(activePaneId);
+
+    try {
+      const activeJob = await request("fs.job.active");
+      if (activeJob && ["queued", "scanning", "running"].includes(activeJob.state)) {
+        activeJobId = activeJob.id;
+        activeJobCutPaths = null;
+        jobbar.hidden = false;
+        refreshToolbar();
+        void pollJob(activeJobId);
+      }
+    } catch (error) {
+      console.warn("File Manager could not restore active job:", error);
+    }
+
     refreshToolbar();
     scheduleSave();
   }
