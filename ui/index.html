@@ -10,14 +10,18 @@ html,body{width:100%;height:100%;margin:0}
 body{font-family:var(--remotehand-ui-font-family,Inter,ui-sans-serif,system-ui,sans-serif);font-size:var(--remotehand-ui-font-size,13px);background:var(--remotehand-background,#11151a);color:var(--remotehand-text,#dee5ef);user-select:none}
 [hidden]{display:none!important}
 .shell{height:100%;display:flex;flex-direction:column;padding:12px;gap:10px}
-.header{display:flex;align-items:center;gap:10px}
-.header h1{font-size:18px;margin:0}
+.header{display:flex;align-items:center;gap:8px;min-width:0}
+.header h1{font-size:18px;margin:0;white-space:nowrap}
 .spacer{flex:1}
 button,input{font:inherit}
 button{border:1px solid var(--remotehand-border,#3d4a58);background:var(--remotehand-button-background,#232c37);color:var(--remotehand-text,#f3f7fb);border-radius:7px;padding:7px 10px;cursor:pointer}
 button:hover{background:var(--remotehand-button-hover,#2a3542)}
-button:disabled{opacity:.45;cursor:default}
+button:disabled{opacity:.42;cursor:default}
 button.toggle[aria-pressed="true"]{border-color:var(--remotehand-accent-border,#5d7fa4);background:var(--remotehand-accent-surface,#19304a)}
+.toolbar{display:flex;align-items:center;gap:5px;min-width:0;overflow:auto}
+.tool{width:34px;height:32px;padding:6px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
+.tool svg{width:18px;height:18px;display:block}
+.tool-sep{width:1px;height:22px;background:var(--remotehand-border,#384451);margin:0 2px;flex:0 0 auto}
 .panes{min-height:0;flex:1;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
 .panes.dual{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
 .pane{min-width:0;min-height:0;display:flex;flex-direction:column;border:1px solid var(--remotehand-border,#2e3743);border-radius:10px;background:var(--remotehand-surface,#171d24);overflow:hidden}
@@ -43,6 +47,7 @@ td:nth-child(3){text-align:right}
 tr.entry{cursor:default}
 tr.entry:hover{background:var(--remotehand-surface-raised,#1d2630)}
 tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
+tr.entry.cut{opacity:.55}
 .name-cell{display:flex;align-items:center;gap:8px;min-width:0}
 .icon{width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center;color:var(--remotehand-muted-text,#93a1b2)}
 .icon svg{width:18px;height:18px;display:block}
@@ -51,17 +56,55 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 .icon.broken{color:var(--remotehand-danger-text,#ffc6c6)}
 .name{overflow:hidden;text-overflow:ellipsis}
 .empty{padding:28px 14px;text-align:center;color:var(--remotehand-muted-text,#93a1b2)}
-@media(max-width:760px){.panes.dual{grid-template-columns:minmax(0,1fr)}.panes.dual .pane[data-pane="right"]{min-height:280px}}
+.jobbar{display:flex;align-items:center;gap:9px;border:1px solid var(--remotehand-border,#2e3743);border-radius:9px;background:var(--remotehand-surface,#171d24);padding:7px 9px}
+.jobtext{min-width:0;max-width:42%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.progress{height:7px;min-width:100px;flex:1;border-radius:999px;background:var(--remotehand-input-background,#0f141a);overflow:hidden;border:1px solid var(--remotehand-border,#384451)}
+.progress>div{height:100%;width:0;background:var(--remotehand-accent,#579ce7)}
+.jobmeta{color:var(--remotehand-muted-text,#93a1b2);font-size:12px;white-space:nowrap}
+.modal-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.55);display:flex;align-items:center;justify-content:center;padding:24px;z-index:50}
+.modal{width:min(520px,100%);max-height:min(80vh,680px);overflow:auto;background:var(--remotehand-surface,#171d24);border:1px solid var(--remotehand-border,#384451);border-radius:12px;box-shadow:0 18px 60px rgba(0,0,0,.45);padding:16px;user-select:text}
+.modal h2{font-size:16px;margin:0 0 12px}
+.modal p{margin:8px 0;color:var(--remotehand-muted-text,#a5b0bd)}
+.modal input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:8px 9px;outline:none;user-select:text}
+.modal input:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
+.modal-actions{display:flex;justify-content:flex-end;gap:8px;margin-top:14px}
+.props{display:grid;grid-template-columns:max-content minmax(0,1fr);gap:8px 12px;font-size:12px}
+.props dt{color:var(--remotehand-muted-text,#93a1b2)}
+.props dd{margin:0;overflow-wrap:anywhere;user-select:text}
+.danger{border-color:var(--remotehand-danger-border,#7c4343)}
+@media(max-width:760px){.panes.dual{grid-template-columns:minmax(0,1fr)}.panes.dual .pane[data-pane="right"]{min-height:280px}.header{flex-wrap:wrap}.toolbar{order:3;width:100%}}
 </style>
 </head>
 <body>
 <div class="shell">
   <div class="header">
     <h1>File Manager</h1>
+    <div class="toolbar" role="toolbar" aria-label="File operations">
+      <button id="newFolder" class="tool" type="button" title="New Folder (Ctrl+Shift+N)" aria-label="New Folder"></button>
+      <span class="tool-sep"></span>
+      <button id="copy" class="tool" type="button" title="Copy (Ctrl+C)" aria-label="Copy"></button>
+      <button id="cut" class="tool" type="button" title="Cut (Ctrl+X)" aria-label="Cut"></button>
+      <button id="paste" class="tool" type="button" title="Paste (Ctrl+V)" aria-label="Paste"></button>
+      <span class="tool-sep"></span>
+      <button id="rename" class="tool" type="button" title="Rename (F2)" aria-label="Rename"></button>
+      <button id="delete" class="tool danger" type="button" title="Delete to Recycle Bin/Trash (Delete)" aria-label="Delete"></button>
+      <button id="properties" class="tool" type="button" title="Properties (Alt+Enter)" aria-label="Properties"></button>
+      <span id="otherSep" class="tool-sep" hidden></span>
+      <button id="copyOther" class="tool" type="button" title="Copy to Other Pane" aria-label="Copy to Other Pane" hidden></button>
+      <button id="moveOther" class="tool" type="button" title="Move to Other Pane" aria-label="Move to Other Pane" hidden></button>
+    </div>
     <div class="spacer"></div>
     <button id="dualToggle" class="toggle" type="button" aria-pressed="false" title="Show or hide the second file pane">Dual Pane</button>
   </div>
+
   <div id="panes" class="panes"></div>
+
+  <div id="jobbar" class="jobbar" hidden>
+    <div id="jobtext" class="jobtext"></div>
+    <div class="progress"><div id="jobprogress"></div></div>
+    <div id="jobmeta" class="jobmeta"></div>
+    <button id="jobCancel" class="tool" type="button" title="Cancel file operation" aria-label="Cancel file operation"></button>
+  </div>
 </div>
 
 <template id="paneTemplate">
@@ -87,6 +130,14 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   </section>
 </template>
 
+<div id="modalBackdrop" class="modal-backdrop" hidden>
+  <div class="modal" role="dialog" aria-modal="true">
+    <h2 id="modalTitle"></h2>
+    <div id="modalBody"></div>
+    <div id="modalActions" class="modal-actions"></div>
+  </div>
+</div>
+
 <script>
 (() => {
   const request = (method, params = null) => window.remotehand.request(method, params);
@@ -94,10 +145,61 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   const paneTemplate = document.getElementById("paneTemplate");
   const dualToggle = document.getElementById("dualToggle");
 
+  const controls = {
+    newFolder: document.getElementById("newFolder"),
+    copy: document.getElementById("copy"),
+    cut: document.getElementById("cut"),
+    paste: document.getElementById("paste"),
+    rename: document.getElementById("rename"),
+    delete: document.getElementById("delete"),
+    properties: document.getElementById("properties"),
+    copyOther: document.getElementById("copyOther"),
+    moveOther: document.getElementById("moveOther"),
+    otherSep: document.getElementById("otherSep")
+  };
+
+  const jobbar = document.getElementById("jobbar");
+  const jobtext = document.getElementById("jobtext");
+  const jobprogress = document.getElementById("jobprogress");
+  const jobmeta = document.getElementById("jobmeta");
+  const jobCancel = document.getElementById("jobCancel");
+
+  const modalBackdrop = document.getElementById("modalBackdrop");
+  const modalTitle = document.getElementById("modalTitle");
+  const modalBody = document.getElementById("modalBody");
+  const modalActions = document.getElementById("modalActions");
+
   let dualPane = false;
   let activePaneId = "left";
   let saveTimer = null;
+  let clipboard = null;
+  let activeJobId = null;
+  let activeJobCutPath = null;
   const panes = {};
+
+  const svg = {
+    folderPlus:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6.5A2.5 2.5 0 0 1 5.5 4H10l2 2h6.5A2.5 2.5 0 0 1 21 8.5v8A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-10Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M15 10v5m-2.5-2.5h5" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    copy:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8" y="8" width="11" height="11" rx="2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M16 8V6a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8a2 2 0 0 0 2 2h2" fill="none" stroke="currentColor" stroke-width="1.7"/></svg>',
+    cut:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/><circle cx="6" cy="18" r="2.4" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m8 7.5 11 8.5M8 16.5 19 8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    paste:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 5h6v3H9V5Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M8 7H6v13h12V7h-2" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M9 12h6m-6 4h6" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    rename:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 18h4l9-9-4-4-9 9v4Z" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="m12.5 6.5 4 4M4 20h16" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    trash:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 7h14M9 7V4h6v3m-8 0 1 13h8l1-13M10 10v7m4-7v7" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/></svg>',
+    info:'<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5" fill="none" stroke="currentColor" stroke-width="1.7"/><path d="M12 10v6m0-9.5h.01" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>',
+    copyOther:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="7" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="6" width="7" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M9.5 11.5h5m0 0-2-2m2 2-2 2" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    moveOther:'<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="6" width="7" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><rect x="14" y="6" width="7" height="11" rx="1.5" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8.5 11.5h7m0 0-2.5-2.5m2.5 2.5L13 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+    close:'<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>'
+  };
+
+  controls.newFolder.innerHTML = svg.folderPlus;
+  controls.copy.innerHTML = svg.copy;
+  controls.cut.innerHTML = svg.cut;
+  controls.paste.innerHTML = svg.paste;
+  controls.rename.innerHTML = svg.rename;
+  controls.delete.innerHTML = svg.trash;
+  controls.properties.innerHTML = svg.info;
+  controls.copyOther.innerHTML = svg.copyOther;
+  controls.moveOther.innerHTML = svg.moveOther;
+  jobCancel.innerHTML = svg.close;
 
   const formatSize = size => {
     if (size === null || size === undefined) return "";
@@ -116,6 +218,12 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     if (!value) return "";
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? "" : date.toLocaleString();
+  };
+
+  const basename = path => {
+    const cleaned = String(path || "").replace(/[\\/]+$/, "");
+    const parts = cleaned.split(/[\\/]/);
+    return parts[parts.length - 1] || cleaned;
   };
 
   const kindLabel = entry => {
@@ -151,7 +259,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   function splitPath(path) {
     const normalized = String(path || "");
     if (!normalized) return [];
-
     if (/^[A-Za-z]:\\/.test(normalized)) {
       const drive = normalized.slice(0, 3);
       const rest = normalized.slice(3).split("\\").filter(Boolean);
@@ -163,7 +270,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       }
       return parts;
     }
-
     if (normalized.startsWith("\\\\")) {
       const segments = normalized.slice(2).split("\\").filter(Boolean);
       const parts = [];
@@ -174,7 +280,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       }
       return parts;
     }
-
     if (normalized.startsWith("/")) {
       const segments = normalized.split("/").filter(Boolean);
       const parts = [{ label: "/", path: "/" }];
@@ -185,8 +290,31 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       }
       return parts;
     }
-
     return [{ label: normalized, path: normalized }];
+  }
+
+  function selectedEntry(pane = activePane()) {
+    if (!pane || !pane.selectedPath) return null;
+    return pane.entries.find(entry => entry.path === pane.selectedPath) || null;
+  }
+
+  function refreshToolbar() {
+    const pane = activePane();
+    const selected = selectedEntry(pane);
+    const operationRunning = activeJobId !== null;
+    controls.newFolder.disabled = !pane || !pane.currentPath || operationRunning;
+    controls.copy.disabled = !selected || operationRunning;
+    controls.cut.disabled = !selected || operationRunning;
+    controls.paste.disabled = !clipboard || !pane || !pane.currentPath || operationRunning;
+    controls.rename.disabled = !selected || operationRunning;
+    controls.delete.disabled = !selected || operationRunning;
+    controls.properties.disabled = !selected;
+    const otherVisible = dualPane;
+    controls.otherSep.hidden = !otherVisible;
+    controls.copyOther.hidden = !otherVisible;
+    controls.moveOther.hidden = !otherVisible;
+    controls.copyOther.disabled = !selected || operationRunning;
+    controls.moveOther.disabled = !selected || operationRunning;
   }
 
   class BrowserPane {
@@ -205,7 +333,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       this.element.dataset.pane = id;
       panesHost.append(fragment);
       this.element = panesHost.querySelector('.pane[data-pane="' + id + '"]');
-
       this.backButton = this.element.querySelector(".back");
       this.forwardButton = this.element.querySelector(".forward");
       this.parentButton = this.element.querySelector(".parent");
@@ -219,23 +346,21 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 
       this.element.addEventListener("pointerdown", () => setActivePane(this.id));
       this.element.addEventListener("focusin", () => setActivePane(this.id));
-
       this.backButton.addEventListener("click", () => this.goBack());
       this.forwardButton.addEventListener("click", () => this.goForward());
       this.parentButton.addEventListener("click", () => this.parentPath && this.navigate(this.parentPath));
       this.refreshButton.addEventListener("click", () => this.currentPath && this.load(this.currentPath, "refresh"));
-
       this.breadcrumbs.addEventListener("click", event => {
         if (event.target === this.breadcrumbs) this.beginPathEdit(false);
       });
       this.breadcrumbs.addEventListener("keydown", event => {
-        if (event.key === "Enter" || event.key === "F2") {
+        if (event.key === "Enter") {
           event.preventDefault();
           this.beginPathEdit(true);
         }
       });
       this.pathWrap.addEventListener("dblclick", event => {
-        if (!this.pathInput.hidden) return;
+        if (!this.pathInput.hidden && event.target !== this.pathInput) return;
         if (event.target === this.breadcrumbs || event.target === this.pathWrap) this.beginPathEdit(true);
       });
       this.pathInput.addEventListener("keydown", event => {
@@ -256,23 +381,19 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       this.updateButtons();
     }
 
-    setHidden(hidden) {
-      this.element.hidden = hidden;
-    }
-
+    setHidden(hidden) { this.element.hidden = hidden; }
     setBusy(value) {
       this.busy = value;
       this.pathInput.disabled = value;
       this.updateButtons();
+      refreshToolbar();
     }
-
     updateButtons() {
       this.backButton.disabled = this.busy || this.back.length === 0;
       this.forwardButton.disabled = this.busy || this.forward.length === 0;
       this.parentButton.disabled = this.busy || !this.parentPath;
       this.refreshButton.disabled = this.busy || !this.currentPath;
     }
-
     beginPathEdit(selectAll = false) {
       if (this.busy) return;
       setActivePane(this.id);
@@ -282,13 +403,11 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       this.pathInput.focus();
       if (selectAll) this.pathInput.select();
     }
-
     endPathEdit() {
       this.pathInput.hidden = true;
       this.breadcrumbs.hidden = false;
       this.pathInput.value = this.currentPath;
     }
-
     renderBreadcrumbs() {
       this.breadcrumbs.replaceChildren();
       const parts = splitPath(this.currentPath);
@@ -312,15 +431,14 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
         this.breadcrumbs.append(button);
       });
     }
-
     render() {
       this.body.replaceChildren();
       this.empty.hidden = this.entries.length !== 0;
-
       for (const entry of this.entries) {
         const row = document.createElement("tr");
         row.className = "entry";
         if (entry.path === this.selectedPath) row.classList.add("selected");
+        if (clipboard && clipboard.mode === "move" && clipboard.path === entry.path) row.classList.add("cut");
         row.tabIndex = 0;
 
         const nameCell = document.createElement("td");
@@ -347,27 +465,25 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
           setActivePane(this.id);
           this.selectedPath = entry.path;
           this.render();
+          refreshToolbar();
         });
 
         const canNavigate = entry.kind === "directory"
           || (entry.kind === "symlink" && entry.linkTargetKind === "directory" && !entry.brokenLink);
-
-        row.addEventListener("dblclick", () => {
-          if (canNavigate) this.navigate(entry.path);
-        });
+        row.addEventListener("dblclick", () => { if (canNavigate) this.navigate(entry.path); });
         row.addEventListener("keydown", event => {
           if (event.key === "Enter" && canNavigate) {
             event.preventDefault();
             this.navigate(entry.path);
           }
         });
-
         this.body.append(row);
       }
 
       this.status.classList.remove("error");
       this.status.textContent = `${this.entries.length} item${this.entries.length === 1 ? "" : "s"}`;
       this.updateButtons();
+      refreshToolbar();
     }
 
     async load(path = null, historyMode = "push", fallbackToInitial = false) {
@@ -376,17 +492,12 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       this.setBusy(true);
       this.status.classList.remove("error");
       this.status.textContent = "Loading…";
-
       try {
-        const result = path === null
-          ? await request("fs.initial")
-          : await request("fs.list", { path });
-
+        const result = path === null ? await request("fs.initial") : await request("fs.list", { path });
         if (historyMode === "push" && previousPath && previousPath !== result.path) {
           this.back.push(previousPath);
           this.forward = [];
         }
-
         this.currentPath = result.path;
         this.parentPath = result.parent || null;
         this.entries = Array.isArray(result.entries) ? result.entries : [];
@@ -416,7 +527,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       if (!path || path === this.currentPath) return;
       this.load(path, "push");
     }
-
     async goBack() {
       if (this.busy || this.back.length === 0) return;
       const target = this.back.pop();
@@ -428,7 +538,6 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       }
       this.updateButtons();
     }
-
     async goForward() {
       if (this.busy || this.forward.length === 0) return;
       const target = this.forward.pop();
@@ -448,12 +557,11 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     for (const pane of Object.values(panes)) {
       pane.element.classList.toggle("active", pane.id === activePaneId);
     }
+    refreshToolbar();
     scheduleSave();
   }
-
-  function activePane() {
-    return panes[activePaneId] || panes.left;
-  }
+  function activePane() { return panes[activePaneId] || panes.left; }
+  function otherPane() { return activePaneId === "left" ? panes.right : panes.left; }
 
   function applyLayout() {
     panesHost.classList.toggle("dual", dualPane);
@@ -461,6 +569,7 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     dualToggle.setAttribute("aria-pressed", String(dualPane));
     dualToggle.textContent = dualPane ? "Single Pane" : "Dual Pane";
     if (!dualPane && activePaneId === "right") setActivePane("left");
+    refreshToolbar();
   }
 
   function uiState() {
@@ -476,13 +585,268 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
     if (saveTimer !== null) clearTimeout(saveTimer);
     saveTimer = setTimeout(async () => {
       saveTimer = null;
-      try {
-        await request("ui.state.set", uiState());
-      } catch (error) {
-        console.warn("File Manager could not persist UI state:", error);
-      }
+      try { await request("ui.state.set", uiState()); }
+      catch (error) { console.warn("File Manager could not persist UI state:", error); }
     }, 150);
   }
+
+  function closeModal() {
+    modalBackdrop.hidden = true;
+    modalTitle.textContent = "";
+    modalBody.replaceChildren();
+    modalActions.replaceChildren();
+  }
+
+  function actionButton(label, primary = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    if (primary) button.style.borderColor = "var(--remotehand-accent-border,#5d7fa4)";
+    return button;
+  }
+
+  function promptModal(title, label, initialValue = "") {
+    return new Promise(resolve => {
+      modalTitle.textContent = title;
+      modalBody.replaceChildren();
+      const text = document.createElement("p");
+      text.textContent = label;
+      const input = document.createElement("input");
+      input.value = initialValue;
+      modalBody.append(text, input);
+      modalActions.replaceChildren();
+      const cancel = actionButton("Cancel");
+      const ok = actionButton("OK", true);
+      const finish = value => { closeModal(); resolve(value); };
+      cancel.addEventListener("click", () => finish(null));
+      ok.addEventListener("click", () => finish(input.value.trim()));
+      input.addEventListener("keydown", event => {
+        if (event.key === "Enter") { event.preventDefault(); finish(input.value.trim()); }
+        if (event.key === "Escape") { event.preventDefault(); finish(null); }
+      });
+      modalActions.append(cancel, ok);
+      modalBackdrop.hidden = false;
+      input.focus();
+      input.select();
+    });
+  }
+
+  function confirmModal(title, message, confirmLabel = "OK") {
+    return new Promise(resolve => {
+      modalTitle.textContent = title;
+      modalBody.replaceChildren();
+      const p = document.createElement("p");
+      p.textContent = message;
+      modalBody.append(p);
+      modalActions.replaceChildren();
+      const cancel = actionButton("Cancel");
+      const ok = actionButton(confirmLabel, true);
+      cancel.addEventListener("click", () => { closeModal(); resolve(false); });
+      ok.addEventListener("click", () => { closeModal(); resolve(true); });
+      modalActions.append(cancel, ok);
+      modalBackdrop.hidden = false;
+      ok.focus();
+    });
+  }
+
+  function showPropertiesModal(properties) {
+    modalTitle.textContent = "Properties";
+    modalBody.replaceChildren();
+    const dl = document.createElement("dl");
+    dl.className = "props";
+    const rows = [
+      ["Name", properties.name],
+      ["Type", properties.kind],
+      ["Location", properties.path],
+      ["Size", properties.size == null ? "—" : formatSize(properties.size)],
+      ["Modified", properties.modifiedMs ? formatModified(properties.modifiedMs) : "—"],
+      ["Hidden", properties.hidden ? "Yes" : "No"]
+    ];
+    if (properties.linkTarget) rows.push(["Link target", properties.linkTarget]);
+    if (properties.linkTargetKind) rows.push(["Target type", properties.linkTargetKind]);
+    for (const [label, value] of rows) {
+      const dt = document.createElement("dt");
+      const dd = document.createElement("dd");
+      dt.textContent = label;
+      dd.textContent = String(value ?? "—");
+      dl.append(dt, dd);
+    }
+    modalBody.append(dl);
+    modalActions.replaceChildren();
+    const close = actionButton("Close", true);
+    close.addEventListener("click", closeModal);
+    modalActions.append(close);
+    modalBackdrop.hidden = false;
+    close.focus();
+  }
+
+  async function refreshAllPanes() {
+    const tasks = [];
+    if (panes.left.currentPath) tasks.push(panes.left.load(panes.left.currentPath, "refresh"));
+    if (panes.right.currentPath) tasks.push(panes.right.load(panes.right.currentPath, "refresh"));
+    await Promise.allSettled(tasks);
+  }
+
+  function setClipboard(mode) {
+    const entry = selectedEntry();
+    if (!entry || activeJobId !== null) return;
+    clipboard = { mode, path: entry.path, name: entry.name };
+    for (const pane of Object.values(panes)) pane.render();
+    refreshToolbar();
+  }
+
+  async function runJob(kind, source, destinationDir, clearCutOnSuccess = false) {
+    if (activeJobId !== null) return;
+    try {
+      const started = await request("fs.job.start", { kind, source, destinationDir });
+      activeJobId = started.jobId;
+      activeJobCutPath = clearCutOnSuccess ? source : null;
+      jobbar.hidden = false;
+      refreshToolbar();
+      await pollJob(activeJobId);
+    } catch (error) {
+      await confirmModal("File operation failed", String(error), "Close");
+    }
+  }
+
+  async function pollJob(id) {
+    try {
+      for (;;) {
+        const job = await request("fs.job.get", { id });
+        const total = Number(job.bytesTotal || 0);
+        const done = Number(job.bytesDone || 0);
+        const itemsTotal = Number(job.itemsTotal || 0);
+        const itemsDone = Number(job.itemsDone || 0);
+        const percent = total > 0 ? Math.min(100, (done / total) * 100) : (itemsTotal > 0 ? Math.min(100, (itemsDone / itemsTotal) * 100) : 0);
+        jobprogress.style.width = `${percent}%`;
+        jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${basename(job.source)}`;
+        jobmeta.textContent = job.state === "scanning"
+          ? "Scanning…"
+          : `${job.state} · ${itemsDone}/${itemsTotal || "?"} items`;
+        jobCancel.disabled = !job.cancellable || !["queued","scanning","running"].includes(job.state);
+
+        if (["completed","failed","cancelled"].includes(job.state)) {
+          if (job.state === "completed" && activeJobCutPath && clipboard && clipboard.mode === "move" && clipboard.path === activeJobCutPath) {
+            clipboard = null;
+          }
+          activeJobId = null;
+          activeJobCutPath = null;
+          refreshToolbar();
+          await refreshAllPanes();
+          for (const pane of Object.values(panes)) pane.render();
+
+          if (job.state === "failed") {
+            jobbar.hidden = true;
+            await confirmModal("File operation failed", job.error || "The file operation failed.", "Close");
+          } else if (job.state === "cancelled") {
+            jobtext.textContent = "Operation cancelled";
+            jobmeta.textContent = "";
+            setTimeout(() => { if (activeJobId === null) jobbar.hidden = true; }, 1000);
+          } else {
+            jobtext.textContent = "Operation completed";
+            jobmeta.textContent = "";
+            jobprogress.style.width = "100%";
+            setTimeout(() => { if (activeJobId === null) jobbar.hidden = true; }, 1000);
+          }
+          return;
+        }
+
+        await new Promise(resolve => setTimeout(resolve, 180));
+      }
+    } catch (error) {
+      activeJobId = null;
+      activeJobCutPath = null;
+      jobbar.hidden = true;
+      refreshToolbar();
+      await confirmModal("File operation failed", String(error), "Close");
+    }
+  }
+
+  async function pasteClipboard() {
+    const pane = activePane();
+    if (!clipboard || !pane.currentPath || activeJobId !== null) return;
+    await runJob(clipboard.mode === "move" ? "move" : "copy", clipboard.path, pane.currentPath, clipboard.mode === "move");
+  }
+
+  async function createFolder() {
+    const pane = activePane();
+    if (!pane.currentPath || activeJobId !== null) return;
+    const name = await promptModal("New Folder", "Folder name:");
+    if (!name) return;
+    try {
+      await request("fs.mkdir", { parent: pane.currentPath, name });
+      await pane.load(pane.currentPath, "refresh");
+    } catch (error) {
+      await confirmModal("Could not create folder", String(error), "Close");
+    }
+  }
+
+  async function renameSelected() {
+    const pane = activePane();
+    const entry = selectedEntry(pane);
+    if (!entry || activeJobId !== null) return;
+    const name = await promptModal("Rename", "New name:", entry.name);
+    if (!name || name === entry.name) return;
+    try {
+      await request("fs.rename", { path: entry.path, name });
+      await refreshAllPanes();
+    } catch (error) {
+      await confirmModal("Could not rename item", String(error), "Close");
+    }
+  }
+
+  async function deleteSelected() {
+    const pane = activePane();
+    const entry = selectedEntry(pane);
+    if (!entry || activeJobId !== null) return;
+    const ok = await confirmModal(
+      "Move to Recycle Bin/Trash",
+      `Move “${entry.name}” to the Recycle Bin/Trash?`,
+      "Delete"
+    );
+    if (!ok) return;
+    try {
+      await request("fs.delete", { path: entry.path });
+      if (clipboard && clipboard.path === entry.path) clipboard = null;
+      await refreshAllPanes();
+    } catch (error) {
+      await confirmModal("Could not delete item", String(error), "Close");
+    }
+  }
+
+  async function showProperties() {
+    const entry = selectedEntry();
+    if (!entry) return;
+    try {
+      const properties = await request("fs.properties", { path: entry.path });
+      showPropertiesModal(properties);
+    } catch (error) {
+      await confirmModal("Could not read properties", String(error), "Close");
+    }
+  }
+
+  async function sendToOther(kind) {
+    if (!dualPane || activeJobId !== null) return;
+    const entry = selectedEntry();
+    const destination = otherPane();
+    if (!entry || !destination.currentPath) return;
+    await runJob(kind, entry.path, destination.currentPath, false);
+  }
+
+  controls.newFolder.addEventListener("click", createFolder);
+  controls.copy.addEventListener("click", () => setClipboard("copy"));
+  controls.cut.addEventListener("click", () => setClipboard("move"));
+  controls.paste.addEventListener("click", pasteClipboard);
+  controls.rename.addEventListener("click", renameSelected);
+  controls.delete.addEventListener("click", deleteSelected);
+  controls.properties.addEventListener("click", showProperties);
+  controls.copyOther.addEventListener("click", () => sendToOther("copy"));
+  controls.moveOther.addEventListener("click", () => sendToOther("move"));
+  jobCancel.addEventListener("click", async () => {
+    if (activeJobId === null) return;
+    try { await request("fs.job.cancel", { id: activeJobId }); }
+    catch (error) { console.warn("Could not cancel File Manager job:", error); }
+  });
 
   dualToggle.addEventListener("click", async () => {
     dualPane = !dualPane;
@@ -510,8 +874,34 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   }, { capture: true });
 
   window.addEventListener("keydown", event => {
+    if (!modalBackdrop.hidden) {
+      if (event.key === "Escape") closeModal();
+      return;
+    }
     const pane = activePane();
-    if (event.ctrlKey && event.key.toLowerCase() === "l") {
+    const key = event.key.toLowerCase();
+
+    if (event.ctrlKey && event.shiftKey && key === "n") {
+      event.preventDefault();
+      createFolder();
+      return;
+    }
+    if (event.ctrlKey && key === "c") {
+      event.preventDefault();
+      setClipboard("copy");
+      return;
+    }
+    if (event.ctrlKey && key === "x") {
+      event.preventDefault();
+      setClipboard("move");
+      return;
+    }
+    if (event.ctrlKey && key === "v") {
+      event.preventDefault();
+      pasteClipboard();
+      return;
+    }
+    if (event.ctrlKey && key === "l") {
       event.preventDefault();
       pane.beginPathEdit(true);
       return;
@@ -531,6 +921,21 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       if (pane.parentPath) pane.navigate(pane.parentPath);
       return;
     }
+    if (event.altKey && event.key === "Enter") {
+      event.preventDefault();
+      showProperties();
+      return;
+    }
+    if (event.key === "F2") {
+      event.preventDefault();
+      renameSelected();
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      deleteSelected();
+      return;
+    }
     if (event.key === "F5") {
       event.preventDefault();
       if (pane.currentPath) pane.load(pane.currentPath, "refresh");
@@ -540,13 +945,9 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   async function initialize() {
     panes.left = new BrowserPane("left");
     panes.right = new BrowserPane("right");
-
     let stored = null;
-    try {
-      stored = await request("ui.state.get");
-    } catch (error) {
-      console.warn("File Manager could not restore UI state:", error);
-    }
+    try { stored = await request("ui.state.get"); }
+    catch (error) { console.warn("File Manager could not restore UI state:", error); }
 
     dualPane = Boolean(stored && stored.dualPane);
     activePaneId = stored && stored.activePane === "right" ? "right" : "left";
@@ -555,12 +956,12 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 
     const leftPath = stored && stored.leftPath ? stored.leftPath : null;
     await panes.left.load(leftPath, "initial", true);
-
     const rightPath = stored && stored.rightPath ? stored.rightPath : panes.left.currentPath;
     await panes.right.load(rightPath || null, "initial", true);
 
     applyLayout();
     setActivePane(activePaneId);
+    refreshToolbar();
     scheduleSave();
   }
 
