@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::cmp::Ordering;
 use std::env;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
@@ -181,7 +180,7 @@ fn kind_rank(kind: &EntryKind) -> u8 {
 }
 
 fn list_directory(path: &Path) -> Result<Value, String> {
-    let canonical = fs::canonicalize(path)
+    let canonical = dunce::canonicalize(path)
         .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
     if !canonical.is_dir() {
         return Err(format!("not a directory: {}", path_text(&canonical)));
