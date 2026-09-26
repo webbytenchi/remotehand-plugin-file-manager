@@ -1,9 +1,15 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::env;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::sync::{
+    atomic::{AtomicBool, AtomicU64, Ordering},
+    Arc, Mutex,
+};
+use std::thread;
 use std::time::UNIX_EPOCH;
 
 const PLUGIN_ID: &str = "remotehand.file-manager";
@@ -133,13 +139,452 @@ struct DirectoryEntry {
     hidden: bool,
 }
 
-#[derive(Debug, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 enum EntryKind {
     Directory,
     File,
     Symlink,
     Other,
+}
+
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct JobSnapshot {
+    id: u64,
+    kind: String,
+    state: String,
+    source: String,
+    destination: String,
+    bytes_total: u64,
+    bytes_done: u64,
+    items_total: u64,
+    items_done: u64,
+    cancellable: bool,
+    error: Option<String>,
+}
+
+struct JobControl {
+    snapshot: Mutex<JobSnapshot>,
+    cancel: AtomicBool,
+}
+
+#[derive(Default)]
+struct JobManager {
+    next_id: AtomicU64,
+    jobs: Mutex<BTreeMap<u64, Arc<JobControl>>>,
+}
+
+impl JobManager {
+    fn create(&self, kind: &str, source: &Path, destination: &Path) -> Result<Arc<JobControl>, String> {
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        let snapshot = JobSnapshot {
+            id,
+            kind: kind.to_string(),
+            state: "queued".to_string(),
+            source: path_text(source),
+            destination: path_text(destination),
+            bytes_total: 0,
+            bytes_done: 0,
+            items_total: 0,
+            items_done: 0,
+            cancellable: true,
+            error: None,
+        };
+        let control = Arc::new(JobControl {
+            snapshot: Mutex::new(snapshot),
+            cancel: AtomicBool::new(false),
+        });
+        self.jobs
+            .lock()
+            .map_err(|_| "job store lock poisoned".to_string())?
+            .insert(id, Arc::clone(&control));
+        Ok(control)
+    }
+
+    fn get(&self, id: u64) -> Result<JobSnapshot, String> {
+        let control = self
+            .jobs
+            .lock()
+            .map_err(|_| "job store lock poisoned".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("file operation job {id} was not found"))?;
+        control
+            .snapshot
+            .lock()
+            .map(|value| value.clone())
+            .map_err(|_| "job state lock poisoned".to_string())
+    }
+
+    fn cancel(&self, id: u64) -> Result<JobSnapshot, String> {
+        let control = self
+            .jobs
+            .lock()
+            .map_err(|_| "job store lock poisoned".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("file operation job {id} was not found"))?;
+        control.cancel.store(true, Ordering::Relaxed);
+        self.get(id)
+    }
+}
+
+fn validate_leaf_name(name: &str) -> Result<&str, String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("name is required".to_string());
+    }
+    if trimmed == "." || trimmed == ".." || trimmed.len() > 255 {
+        return Err("invalid file or folder name".to_string());
+    }
+    let path = Path::new(trimmed);
+    if path.components().count() != 1 || path.is_absolute() {
+        return Err("name must not contain a path".to_string());
+    }
+    Ok(trimmed)
+}
+
+fn ensure_regular_parent(path: &Path) -> Result<PathBuf, String> {
+    let canonical = dunce::canonicalize(path)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
+    if !canonical.is_dir() {
+        return Err(format!("not a directory: {}", path_text(&canonical)));
+    }
+    Ok(canonical)
+}
+
+fn create_folder(parent: &Path, name: &str) -> Result<Value, String> {
+    let parent = ensure_regular_parent(parent)?;
+    let name = validate_leaf_name(name)?;
+    let target = parent.join(name);
+    if target.exists() {
+        return Err(format!("already exists: {}", path_text(&target)));
+    }
+    fs::create_dir(&target)
+        .map_err(|error| format!("cannot create {}: {error}", path_text(&target)))?;
+    Ok(json!({ "path": path_text(&target) }))
+}
+
+fn rename_entry(path: &Path, name: &str) -> Result<Value, String> {
+    let source = dunce::canonicalize(path)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
+    let name = validate_leaf_name(name)?;
+    let parent = source
+        .parent()
+        .ok_or_else(|| "cannot rename a filesystem root".to_string())?;
+    let target = parent.join(name);
+    if target == source {
+        return Ok(json!({ "path": path_text(&source) }));
+    }
+    if target.exists() {
+        return Err(format!("already exists: {}", path_text(&target)));
+    }
+    fs::rename(&source, &target)
+        .map_err(|error| format!("cannot rename {}: {error}", path_text(&source)))?;
+    Ok(json!({ "path": path_text(&target) }))
+}
+
+fn entry_properties(path: &Path) -> Result<Value, String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(path)))?;
+    let kind = entry_kind(&metadata);
+    let link_target = if matches!(&kind, EntryKind::Symlink) {
+        fs::read_link(path).ok().map(|value| path_text(&value))
+    } else {
+        None
+    };
+    let target_kind = if matches!(&kind, EntryKind::Symlink) {
+        fs::metadata(path).ok().map(|value| entry_kind(&value))
+    } else {
+        None
+    };
+    Ok(json!({
+        "name": path.file_name().map(|value| value.to_string_lossy().into_owned()).unwrap_or_else(|| path_text(path)),
+        "path": path_text(path),
+        "kind": kind,
+        "size": matches!(&kind, EntryKind::File).then_some(metadata.len()),
+        "modifiedMs": modified_ms(&metadata),
+        "hidden": is_hidden(path, &metadata),
+        "linkTarget": link_target,
+        "linkTargetKind": target_kind
+    }))
+}
+
+fn recycle_entry(path: &Path) -> Result<Value, String> {
+    if fs::symlink_metadata(path).is_err() {
+        return Err(format!("cannot find {}", path_text(path)));
+    }
+    trash::delete(path)
+        .map_err(|error| format!("cannot move {} to Recycle Bin/Trash: {error}", path_text(path)))?;
+    Ok(json!({ "deleted": true }))
+}
+
+fn scan_tree(path: &Path, totals: &mut (u64, u64), cancel: &AtomicBool) -> Result<(), String> {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".to_string());
+    }
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(path)))?;
+    totals.1 = totals.1.saturating_add(1);
+    if metadata.file_type().is_symlink() {
+        return Ok(());
+    }
+    if metadata.is_file() {
+        totals.0 = totals.0.saturating_add(metadata.len());
+        return Ok(());
+    }
+    if metadata.is_dir() {
+        for item in fs::read_dir(path)
+            .map_err(|error| format!("cannot read {}: {error}", path_text(path)))?
+        {
+            let item = item.map_err(|error| format!("failed to read directory entry: {error}"))?;
+            scan_tree(&item.path(), totals, cancel)?;
+        }
+        return Ok(());
+    }
+    Err(format!("unsupported filesystem entry: {}", path_text(path)))
+}
+
+fn note_progress(control: &JobControl, bytes: u64, items: u64) -> Result<(), String> {
+    let mut snapshot = control
+        .snapshot
+        .lock()
+        .map_err(|_| "job state lock poisoned".to_string())?;
+    snapshot.bytes_done = snapshot.bytes_done.saturating_add(bytes);
+    snapshot.items_done = snapshot.items_done.saturating_add(items);
+    Ok(())
+}
+
+fn copy_symlink(source: &Path, destination: &Path) -> Result<(), String> {
+    let target = fs::read_link(source)
+        .map_err(|error| format!("cannot read link {}: {error}", path_text(source)))?;
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(&target, destination)
+            .map_err(|error| format!("cannot copy link {}: {error}", path_text(source)))
+    }
+    #[cfg(windows)]
+    {
+        let points_to_dir = fs::metadata(source).map(|metadata| metadata.is_dir()).unwrap_or(false);
+        let result = if points_to_dir {
+            std::os::windows::fs::symlink_dir(&target, destination)
+        } else {
+            std::os::windows::fs::symlink_file(&target, destination)
+        };
+        result.map_err(|error| format!("cannot copy link {}: {error}", path_text(source)))
+    }
+}
+
+fn copy_file_with_progress(source: &Path, destination: &Path, control: &JobControl) -> Result<(), String> {
+    let mut input = fs::File::open(source)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(source)))?;
+    let mut output = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(destination)
+        .map_err(|error| format!("cannot create {}: {error}", path_text(destination)))?;
+    let mut buffer = vec![0u8; 256 * 1024];
+    loop {
+        if control.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        let count = input
+            .read(&mut buffer)
+            .map_err(|error| format!("cannot read {}: {error}", path_text(source)))?;
+        if count == 0 {
+            break;
+        }
+        output
+            .write_all(&buffer[..count])
+            .map_err(|error| format!("cannot write {}: {error}", path_text(destination)))?;
+        note_progress(control, count as u64, 0)?;
+    }
+    let _ = output.flush();
+    if let Ok(metadata) = fs::metadata(source) {
+        let _ = fs::set_permissions(destination, metadata.permissions());
+    }
+    note_progress(control, 0, 1)
+}
+
+fn copy_tree(source: &Path, destination: &Path, control: &JobControl) -> Result<(), String> {
+    if control.cancel.load(Ordering::Relaxed) {
+        return Err("cancelled".to_string());
+    }
+    let metadata = fs::symlink_metadata(source)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(source)))?;
+    if metadata.file_type().is_symlink() {
+        copy_symlink(source, destination)?;
+        return note_progress(control, 0, 1);
+    }
+    if metadata.is_file() {
+        return copy_file_with_progress(source, destination, control);
+    }
+    if metadata.is_dir() {
+        fs::create_dir(destination)
+            .map_err(|error| format!("cannot create {}: {error}", path_text(destination)))?;
+        note_progress(control, 0, 1)?;
+        for item in fs::read_dir(source)
+            .map_err(|error| format!("cannot read {}: {error}", path_text(source)))?
+        {
+            let item = item.map_err(|error| format!("failed to read directory entry: {error}"))?;
+            copy_tree(&item.path(), &destination.join(item.file_name()), control)?;
+        }
+        return Ok(());
+    }
+    Err(format!("unsupported filesystem entry: {}", path_text(source)))
+}
+
+fn remove_tree_no_follow(path: &Path) -> Result<(), String> {
+    let metadata = fs::symlink_metadata(path)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(path)))?;
+    if metadata.file_type().is_symlink() || metadata.is_file() {
+        return fs::remove_file(path)
+            .map_err(|error| format!("cannot remove {}: {error}", path_text(path)));
+    }
+    if metadata.is_dir() {
+        for item in fs::read_dir(path)
+            .map_err(|error| format!("cannot read {}: {error}", path_text(path)))?
+        {
+            let item = item.map_err(|error| format!("failed to read directory entry: {error}"))?;
+            remove_tree_no_follow(&item.path())?;
+        }
+        return fs::remove_dir(path)
+            .map_err(|error| format!("cannot remove {}: {error}", path_text(path)));
+    }
+    Err(format!("unsupported filesystem entry: {}", path_text(path)))
+}
+
+fn cleanup_partial_destination(path: &Path) {
+    if fs::symlink_metadata(path).is_ok() {
+        let _ = remove_tree_no_follow(path);
+    }
+}
+
+fn validate_job_paths(source: &Path, destination_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
+    let source = dunce::canonicalize(source)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(source)))?;
+    let destination_dir = ensure_regular_parent(destination_dir)?;
+    let name = source
+        .file_name()
+        .ok_or_else(|| "cannot copy or move a filesystem root".to_string())?;
+    let destination = destination_dir.join(name);
+    if destination.exists() {
+        return Err(format!("already exists: {}", path_text(&destination)));
+    }
+    if source == destination {
+        return Err("source and destination are the same".to_string());
+    }
+    let metadata = fs::symlink_metadata(&source)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(&source)))?;
+    if metadata.is_dir() && !metadata.file_type().is_symlink() {
+        if let Ok(destination_parent) = dunce::canonicalize(&destination_dir) {
+            if destination_parent.starts_with(&source) {
+                return Err("cannot copy or move a folder inside itself".to_string());
+            }
+        }
+    }
+    Ok((source, destination))
+}
+
+fn start_job(
+    manager: Arc<JobManager>,
+    kind: &str,
+    source: &Path,
+    destination_dir: &Path,
+) -> Result<Value, String> {
+    if kind != "copy" && kind != "move" {
+        return Err("job kind must be copy or move".to_string());
+    }
+    let (source, destination) = validate_job_paths(source, destination_dir)?;
+    let control = manager.create(kind, &source, &destination)?;
+    let id = control
+        .snapshot
+        .lock()
+        .map_err(|_| "job state lock poisoned".to_string())?
+        .id;
+    let kind_owned = kind.to_string();
+    let control_for_thread = Arc::clone(&control);
+
+    thread::spawn(move || {
+        let outcome = (|| -> Result<(), String> {
+            {
+                let mut snapshot = control_for_thread
+                    .snapshot
+                    .lock()
+                    .map_err(|_| "job state lock poisoned".to_string())?;
+                snapshot.state = "scanning".to_string();
+            }
+
+            let mut totals = (0u64, 0u64);
+            scan_tree(&source, &mut totals, &control_for_thread.cancel)?;
+            {
+                let mut snapshot = control_for_thread
+                    .snapshot
+                    .lock()
+                    .map_err(|_| "job state lock poisoned".to_string())?;
+                snapshot.bytes_total = totals.0;
+                snapshot.items_total = totals.1;
+                snapshot.state = "running".to_string();
+            }
+
+            if control_for_thread.cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+
+            if kind_owned == "move" {
+                match fs::rename(&source, &destination) {
+                    Ok(()) => {
+                        let mut snapshot = control_for_thread
+                            .snapshot
+                            .lock()
+                            .map_err(|_| "job state lock poisoned".to_string())?;
+                        snapshot.bytes_done = snapshot.bytes_total;
+                        snapshot.items_done = snapshot.items_total;
+                        return Ok(());
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            let copy_result = copy_tree(&source, &destination, &control_for_thread);
+            if let Err(error) = copy_result {
+                cleanup_partial_destination(&destination);
+                return Err(error);
+            }
+
+            if kind_owned == "move" {
+                if control_for_thread.cancel.load(Ordering::Relaxed) {
+                    cleanup_partial_destination(&destination);
+                    return Err("cancelled".to_string());
+                }
+                remove_tree_no_follow(&source)?;
+            }
+            Ok(())
+        })();
+
+        if let Ok(mut snapshot) = control_for_thread.snapshot.lock() {
+            snapshot.cancellable = false;
+            match outcome {
+                Ok(()) => {
+                    snapshot.state = "completed".to_string();
+                    snapshot.bytes_done = snapshot.bytes_total;
+                    snapshot.items_done = snapshot.items_total;
+                }
+                Err(error) if error == "cancelled" => {
+                    snapshot.state = "cancelled".to_string();
+                    snapshot.error = None;
+                }
+                Err(error) => {
+                    snapshot.state = "failed".to_string();
+                    snapshot.error = Some(error);
+                }
+            }
+        }
+    });
+
+    Ok(json!({ "jobId": id }))
 }
 
 fn write_frame<W: Write, T: Serialize>(writer: &mut W, value: &T) -> Result<(), String> {
@@ -353,6 +798,7 @@ fn list_directory(path: &Path) -> Result<Value, String> {
 fn dispatch(
     request: &HostRequest,
     host_call: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
+    jobs: &Arc<JobManager>,
 ) -> Result<Value, String> {
     match request.method.as_str() {
         "runtime.ping" => Ok(json!({
@@ -397,6 +843,62 @@ fn dispatch(
             }
             list_directory(Path::new(&params.path))
         }
+
+        "fs.mkdir" => {
+            #[derive(Deserialize)]
+            struct Params { parent: String, name: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid create-folder request: {error}"))?;
+            create_folder(Path::new(&params.parent), &params.name)
+        }
+        "fs.rename" => {
+            #[derive(Deserialize)]
+            struct Params { path: String, name: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid rename request: {error}"))?;
+            rename_entry(Path::new(&params.path), &params.name)
+        }
+        "fs.delete" => {
+            #[derive(Deserialize)]
+            struct Params { path: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid delete request: {error}"))?;
+            recycle_entry(Path::new(&params.path))
+        }
+        "fs.properties" => {
+            #[derive(Deserialize)]
+            struct Params { path: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid properties request: {error}"))?;
+            entry_properties(Path::new(&params.path))
+        }
+        "fs.job.start" => {
+            #[derive(Deserialize)]
+            #[serde(rename_all = "camelCase")]
+            struct Params { kind: String, source: String, destination_dir: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid file-operation request: {error}"))?;
+            start_job(
+                Arc::clone(jobs),
+                &params.kind,
+                Path::new(&params.source),
+                Path::new(&params.destination_dir),
+            )
+        }
+        "fs.job.get" => {
+            #[derive(Deserialize)]
+            struct Params { id: u64 }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid job-status request: {error}"))?;
+            serde_json::to_value(jobs.get(params.id)?).map_err(|error| error.to_string())
+        }
+        "fs.job.cancel" => {
+            #[derive(Deserialize)]
+            struct Params { id: u64 }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid job-cancel request: {error}"))?;
+            serde_json::to_value(jobs.cancel(params.id)?).map_err(|error| error.to_string())
+        }
         method => Err(format!("unsupported plugin method: {method}")),
     }
 }
@@ -428,6 +930,7 @@ fn run() -> Result<(), String> {
     }
 
     let mut next_host_request_id = 0u64;
+    let jobs = Arc::new(JobManager::default());
 
     while let Some(payload) = read_frame(&mut stdin)? {
         let request: HostRequest = serde_json::from_slice(&payload)
@@ -450,7 +953,7 @@ fn run() -> Result<(), String> {
             )
         };
 
-        let (ok, result, error) = match dispatch(&request, &mut host_call) {
+        let (ok, result, error) = match dispatch(&request, &mut host_call, &jobs) {
             Ok(result) => (true, result, String::new()),
             Err(error) => (false, Value::Null, error),
         };
@@ -543,6 +1046,49 @@ mod tests {
         });
         assert_eq!(state.active_pane, "left");
         assert!(state.dual_pane);
+    }
+
+
+    #[test]
+    fn validate_leaf_name_rejects_paths() {
+        assert!(validate_leaf_name("../bad").is_err());
+        assert!(validate_leaf_name("folder/name").is_err());
+        assert!(validate_leaf_name("").is_err());
+        assert_eq!(validate_leaf_name("good name").unwrap(), "good name");
+    }
+
+    #[test]
+    fn copy_tree_copies_files_without_following_directory_layout_errors() {
+        let root = temp_dir("copy-tree");
+        let source = root.join("source");
+        let destination = root.join("destination");
+        fs::create_dir(&source).unwrap();
+        fs::write(source.join("hello.txt"), b"hello").unwrap();
+
+        let control = JobControl {
+            snapshot: Mutex::new(JobSnapshot {
+                id: 1,
+                kind: "copy".into(),
+                state: "running".into(),
+                source: path_text(&source),
+                destination: path_text(&destination),
+                bytes_total: 5,
+                bytes_done: 0,
+                items_total: 2,
+                items_done: 0,
+                cancellable: true,
+                error: None,
+            }),
+            cancel: AtomicBool::new(false),
+        };
+
+        copy_tree(&source, &destination, &control).unwrap();
+        assert_eq!(fs::read(destination.join("hello.txt")).unwrap(), b"hello");
+        let snapshot = control.snapshot.lock().unwrap();
+        assert_eq!(snapshot.bytes_done, 5);
+        assert_eq!(snapshot.items_done, 2);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]
