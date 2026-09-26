@@ -175,6 +175,7 @@ tr.entry.cut{opacity:.55}
   let clipboard = null;
   let activeJobId = null;
   let activeJobCutPath = null;
+  let modalDismiss = null;
   const panes = {};
 
   const svg = {
@@ -595,6 +596,14 @@ tr.entry.cut{opacity:.55}
     modalTitle.textContent = "";
     modalBody.replaceChildren();
     modalActions.replaceChildren();
+    modalDismiss = null;
+  }
+
+  function dismissModal() {
+    const dismiss = modalDismiss;
+    modalDismiss = null;
+    if (dismiss) dismiss();
+    else closeModal();
   }
 
   function actionButton(label, primary = false) {
@@ -618,6 +627,7 @@ tr.entry.cut{opacity:.55}
       const cancel = actionButton("Cancel");
       const ok = actionButton("OK", true);
       const finish = value => { closeModal(); resolve(value); };
+      modalDismiss = () => finish(null);
       cancel.addEventListener("click", () => finish(null));
       ok.addEventListener("click", () => finish(input.value.trim()));
       input.addEventListener("keydown", event => {
@@ -641,8 +651,10 @@ tr.entry.cut{opacity:.55}
       modalActions.replaceChildren();
       const cancel = actionButton("Cancel");
       const ok = actionButton(confirmLabel, true);
-      cancel.addEventListener("click", () => { closeModal(); resolve(false); });
-      ok.addEventListener("click", () => { closeModal(); resolve(true); });
+      const finish = value => { closeModal(); resolve(value); };
+      modalDismiss = () => finish(false);
+      cancel.addEventListener("click", () => finish(false));
+      ok.addEventListener("click", () => finish(true));
       modalActions.append(cancel, ok);
       modalBackdrop.hidden = false;
       ok.focus();
@@ -674,6 +686,7 @@ tr.entry.cut{opacity:.55}
     modalBody.append(dl);
     modalActions.replaceChildren();
     const close = actionButton("Close", true);
+    modalDismiss = closeModal;
     close.addEventListener("click", closeModal);
     modalActions.append(close);
     modalBackdrop.hidden = false;
@@ -875,7 +888,10 @@ tr.entry.cut{opacity:.55}
 
   window.addEventListener("keydown", event => {
     if (!modalBackdrop.hidden) {
-      if (event.key === "Escape") closeModal();
+      if (event.key === "Escape") {
+        event.preventDefault();
+        dismissModal();
+      }
       return;
     }
     const pane = activePane();
