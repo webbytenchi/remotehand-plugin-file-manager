@@ -73,6 +73,11 @@ tr.entry.cut{opacity:.55}
 .props dt{color:var(--remotehand-muted-text,#93a1b2)}
 .props dd{margin:0;overflow-wrap:anywhere;user-select:text}
 .danger{border-color:var(--remotehand-danger-border,#7c4343)}
+.context-menu{position:fixed;z-index:80;min-width:190px;padding:5px;background:var(--remotehand-surface,#171d24);border:1px solid var(--remotehand-border,#384451);border-radius:9px;box-shadow:0 12px 34px rgba(0,0,0,.42)}
+.context-menu button{width:100%;border:0;background:transparent;text-align:left;padding:7px 9px;border-radius:6px}
+.context-menu button:hover{background:var(--remotehand-button-hover,#2a3542)}
+.context-menu button:disabled{opacity:.4}
+.context-menu .context-sep{height:1px;background:var(--remotehand-border,#384451);margin:4px 3px}
 @media(max-width:760px){.panes.dual{grid-template-columns:minmax(0,1fr)}.panes.dual .pane[data-pane="right"]{min-height:280px}.header{flex-wrap:wrap}.toolbar{order:3;width:100%}}
 </style>
 </head>
@@ -131,6 +136,8 @@ tr.entry.cut{opacity:.55}
   </section>
 </template>
 
+<div id="contextMenu" class="context-menu" role="menu" hidden></div>
+
 <div id="modalBackdrop" class="modal-backdrop" hidden>
   <div class="modal" role="dialog" aria-modal="true">
     <h2 id="modalTitle"></h2>
@@ -165,6 +172,7 @@ tr.entry.cut{opacity:.55}
   const jobmeta = document.getElementById("jobmeta");
   const jobCancel = document.getElementById("jobCancel");
 
+  const contextMenu = document.getElementById("contextMenu");
   const modalBackdrop = document.getElementById("modalBackdrop");
   const modalTitle = document.getElementById("modalTitle");
   const modalBody = document.getElementById("modalBody");
@@ -177,6 +185,7 @@ tr.entry.cut{opacity:.55}
   let activeJobId = null;
   let activeJobCutPaths = null;
   let modalDismiss = null;
+  let contextPaneId = null;
   const panes = {};
 
   const svg = {
@@ -303,6 +312,99 @@ tr.entry.cut{opacity:.55}
   function selectedEntry(pane = activePane()) {
     const selected = selectedEntries(pane);
     return selected.length === 1 ? selected[0] : null;
+  }
+
+  async function copyText(text) {
+    const value = String(text ?? "");
+    if (!value) return;
+    try {
+      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+    } catch (_) {
+      // Fall through to the legacy clipboard path for WebView environments.
+    }
+
+    const input = document.createElement("textarea");
+    input.value = value;
+    input.setAttribute("readonly", "");
+    input.style.position = "fixed";
+    input.style.opacity = "0";
+    document.body.append(input);
+    input.select();
+    const copied = document.execCommand("copy");
+    input.remove();
+    if (!copied) throw new Error("clipboard access is unavailable");
+  }
+
+  function hideContextMenu() {
+    contextMenu.hidden = true;
+    contextMenu.replaceChildren();
+    contextPaneId = null;
+  }
+
+  function contextMenuButton(label, action, disabled = false) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.disabled = disabled;
+    button.setAttribute("role", "menuitem");
+    button.addEventListener("click", async () => {
+      hideContextMenu();
+      await action();
+    });
+    return button;
+  }
+
+  function contextMenuSeparator() {
+    const separator = document.createElement("div");
+    separator.className = "context-sep";
+    separator.setAttribute("role", "separator");
+    return separator;
+  }
+
+  function showContextMenu(pane, x, y) {
+    setActivePane(pane.id);
+    const entries = selectedEntries(pane);
+    if (entries.length === 0) return;
+
+    contextPaneId = pane.id;
+    const single = entries.length === 1;
+    const operationRunning = activeJobId !== null;
+
+    contextMenu.replaceChildren(
+      contextMenuButton("Copy", () => setClipboard("copy"), operationRunning),
+      contextMenuButton("Cut", () => setClipboard("move"), operationRunning),
+      contextMenuSeparator(),
+      contextMenuButton("Rename", renameSelected, !single || operationRunning),
+      contextMenuButton("Delete", deleteSelected, operationRunning),
+      contextMenuButton("Properties", showProperties, !single),
+      contextMenuSeparator(),
+      contextMenuButton(
+        entries.length === 1 ? "Copy Path" : "Copy Paths",
+        async () => copyText(entries.map(entry => entry.path).join("\n"))
+      ),
+      contextMenuButton(
+        entries.length === 1 ? "Copy Filename" : "Copy Filenames",
+        async () => copyText(entries.map(entry => entry.name).join("\n"))
+      )
+    );
+
+    if (dualPane) {
+      contextMenu.append(
+        contextMenuSeparator(),
+        contextMenuButton("Copy to Other Pane", () => sendToOther("copy"), operationRunning),
+        contextMenuButton("Move to Other Pane", () => sendToOther("move"), operationRunning)
+      );
+    }
+
+    contextMenu.hidden = false;
+    const rect = contextMenu.getBoundingClientRect();
+    const left = Math.max(6, Math.min(x, window.innerWidth - rect.width - 6));
+    const top = Math.max(6, Math.min(y, window.innerHeight - rect.height - 6));
+    contextMenu.style.left = `${left}px`;
+    contextMenu.style.top = `${top}px`;
   }
 
   function refreshToolbar() {
@@ -495,6 +597,18 @@ tr.entry.cut{opacity:.55}
 
           this.render();
           refreshToolbar();
+        });
+
+        row.addEventListener("contextmenu", event => {
+          event.preventDefault();
+          setActivePane(this.id);
+          if (!this.selectedPaths.has(entry.path)) {
+            this.selectedPaths.clear();
+            this.selectedPaths.add(entry.path);
+            this.selectionAnchorIndex = entryIndex;
+            this.render();
+          }
+          showContextMenu(this, event.clientX, event.clientY);
         });
 
         const canNavigate = entry.kind === "directory"
@@ -915,6 +1029,7 @@ tr.entry.cut{opacity:.55}
   });
 
   window.addEventListener("mousedown", event => {
+    if (!contextMenu.hidden && !contextMenu.contains(event.target)) hideContextMenu();
     if (event.button === 3) {
       event.preventDefault();
       activePane().goBack();
@@ -926,11 +1041,19 @@ tr.entry.cut{opacity:.55}
     }
   }, { capture: true });
 
+  window.addEventListener("scroll", hideContextMenu, true);
+  window.addEventListener("resize", hideContextMenu);
+
   window.addEventListener("auxclick", event => {
     if (event.button === 3 || event.button === 4) event.preventDefault();
   }, { capture: true });
 
   window.addEventListener("keydown", event => {
+    if (!contextMenu.hidden && event.key === "Escape") {
+      event.preventDefault();
+      hideContextMenu();
+      return;
+    }
     if (!modalBackdrop.hidden) {
       if (event.key === "Escape") {
         event.preventDefault();
