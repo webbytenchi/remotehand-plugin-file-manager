@@ -200,7 +200,7 @@ fn list_directory(path: &Path) -> Result<Value, String> {
         entries.push(DirectoryEntry {
             name: item.file_name().to_string_lossy().into_owned(),
             path: path_text(&item_path),
-            size: matches!(kind, EntryKind::File).then_some(metadata.len()),
+            size: matches!(&kind, EntryKind::File).then_some(metadata.len()),
             modified_ms: modified_ms(&metadata),
             hidden: is_hidden(&item_path, &metadata),
             kind,
