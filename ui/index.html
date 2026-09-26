@@ -7,7 +7,7 @@
 <style>
 *{box-sizing:border-box}
 html,body{width:100%;height:100%;margin:0}
-body{font-family:var(--remotehand-ui-font-family,Inter,ui-sans-serif,system-ui,sans-serif);font-size:var(--remotehand-ui-font-size,13px);background:var(--remotehand-background,#11151a);color:var(--remotehand-text,#dee5ef)}
+body{font-family:var(--remotehand-ui-font-family,Inter,ui-sans-serif,system-ui,sans-serif);font-size:var(--remotehand-ui-font-size,13px);background:var(--remotehand-background,#11151a);color:var(--remotehand-text,#dee5ef);user-select:none}
 .shell{height:100%;display:flex;flex-direction:column;padding:12px;gap:10px}
 .header{display:flex;align-items:center;gap:10px}
 .header h1{font-size:18px;margin:0}
@@ -20,7 +20,7 @@ button:disabled{opacity:.45;cursor:default}
 .nav{display:flex;gap:6px;align-items:center;padding:8px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
 .nav button{min-width:34px;padding:6px 8px}
 .path-wrap{min-width:0;flex:1}
-.path-input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:7px 9px;outline:none}
+.path-input{width:100%;border:1px solid var(--remotehand-border,#384451);background:var(--remotehand-input-background,#0f141a);color:var(--remotehand-text,#eef3f8);border-radius:7px;padding:7px 9px;outline:none;user-select:text}
 .path-input:focus{border-color:var(--remotehand-accent-border,#5d7fa4)}
 .status{padding:7px 10px;color:var(--remotehand-muted-text,#93a1b2);font-size:12px;border-bottom:1px solid var(--remotehand-border,#2e3743)}
 .error{color:var(--remotehand-danger-text,#ffc6c6)}
