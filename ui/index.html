@@ -49,6 +49,8 @@ tr.entry{cursor:default}
 tr.entry:hover{background:var(--remotehand-surface-raised,#1d2630)}
 tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 tr.entry.cut{opacity:.55}
+tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-offset:-2px;background:var(--remotehand-accent-surface,#19304a)}
+.table-wrap.drag-target{box-shadow:inset 0 0 0 2px var(--remotehand-accent,#579ce7);background:color-mix(in srgb,var(--remotehand-accent,#579ce7) 8%,transparent)}
 .name-cell{display:flex;align-items:center;gap:8px;min-width:0}
 .icon{width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center;color:var(--remotehand-muted-text,#93a1b2)}
 .icon svg{width:18px;height:18px;display:block}
@@ -191,6 +193,7 @@ tr.entry.cut{opacity:.55}
   let modalDismiss = null;
   let contextPaneId = null;
   let activePropertiesScanId = null;
+  let dragState = null;
   const panes = {};
 
   const svg = {
@@ -460,6 +463,7 @@ tr.entry.cut{opacity:.55}
       this.breadcrumbs = this.element.querySelector(".breadcrumbs");
       this.pathInput = this.element.querySelector(".path-input");
       this.status = this.element.querySelector(".status");
+      this.tableWrap = this.element.querySelector(".table-wrap");
       this.body = this.element.querySelector("tbody");
       this.empty = this.element.querySelector(".empty");
 
@@ -497,6 +501,28 @@ tr.entry.cut{opacity:.55}
         }
       });
       this.pathInput.addEventListener("blur", () => this.endPathEdit());
+
+      this.tableWrap.addEventListener("dragover", event => {
+        if (!dragState || activeJobId !== null || !this.currentPath) return;
+        event.preventDefault();
+        event.dataTransfer.dropEffect = "copy";
+        this.tableWrap.classList.add("drag-target");
+      });
+      this.tableWrap.addEventListener("dragleave", event => {
+        if (!this.tableWrap.contains(event.relatedTarget)) {
+          this.tableWrap.classList.remove("drag-target");
+        }
+      });
+      this.tableWrap.addEventListener("drop", event => {
+        if (!dragState || activeJobId !== null || !this.currentPath) return;
+        event.preventDefault();
+        event.stopPropagation();
+        this.tableWrap.classList.remove("drag-target");
+        const paths = [...dragState.paths];
+        clearDragTargets();
+        void handleInternalDrop(paths, this.currentPath);
+      });
+
       this.updateButtons();
     }
 
@@ -618,6 +644,56 @@ tr.entry.cut{opacity:.55}
 
         const canNavigate = entry.kind === "directory"
           || (entry.kind === "symlink" && entry.linkTargetKind === "directory" && !entry.brokenLink);
+
+        row.draggable = activeJobId === null;
+        row.addEventListener("dragstart", event => {
+          if (activeJobId !== null) {
+            event.preventDefault();
+            return;
+          }
+          setActivePane(this.id);
+          if (!this.selectedPaths.has(entry.path)) {
+            this.selectedPaths.clear();
+            this.selectedPaths.add(entry.path);
+            this.selectionAnchorIndex = entryIndex;
+            this.render();
+          }
+          const paths = selectedEntries(this).map(item => item.path);
+          if (paths.length === 0) {
+            event.preventDefault();
+            return;
+          }
+          dragState = { sourcePaneId: this.id, paths };
+          event.dataTransfer.effectAllowed = "copyMove";
+          event.dataTransfer.setData("text/plain", paths.join("\n"));
+        });
+        row.addEventListener("dragend", () => {
+          dragState = null;
+          clearDragTargets();
+        });
+
+        if (canNavigate) {
+          row.addEventListener("dragover", event => {
+            if (!dragState || activeJobId !== null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            event.dataTransfer.dropEffect = "copy";
+            this.tableWrap.classList.remove("drag-target");
+            row.classList.add("drag-target");
+          });
+          row.addEventListener("dragleave", event => {
+            if (!row.contains(event.relatedTarget)) row.classList.remove("drag-target");
+          });
+          row.addEventListener("drop", event => {
+            if (!dragState || activeJobId !== null) return;
+            event.preventDefault();
+            event.stopPropagation();
+            row.classList.remove("drag-target");
+            const paths = [...dragState.paths];
+            clearDragTargets();
+            void handleInternalDrop(paths, entry.path);
+          });
+        }
         row.addEventListener("dblclick", () => { if (canNavigate) this.navigate(entry.path); });
         row.addEventListener("keydown", event => {
           if (event.key === "Enter" && canNavigate) {
@@ -901,6 +977,53 @@ tr.entry.cut{opacity:.55}
     }
   }
 
+  function clearDragTargets() {
+    for (const pane of Object.values(panes)) {
+      if (!pane) continue;
+      pane.tableWrap?.classList.remove("drag-target");
+      pane.element?.querySelectorAll(".drag-target").forEach(element => element.classList.remove("drag-target"));
+    }
+  }
+
+  function chooseDropAction(destinationPath, itemCount) {
+    return new Promise(resolve => {
+      modalTitle.textContent = "Copy or Move";
+      modalBody.replaceChildren();
+      const p = document.createElement("p");
+      const destinationName = basename(destinationPath) || destinationPath;
+      p.textContent = itemCount === 1
+        ? `What would you like to do with this item in “${destinationName}”?`
+        : `What would you like to do with these ${itemCount} items in “${destinationName}”?`;
+      modalBody.append(p);
+      modalActions.replaceChildren();
+
+      const cancel = actionButton("Cancel");
+      const move = actionButton("Move here");
+      const copy = actionButton("Copy here", true);
+      const finish = value => {
+        closeModal();
+        resolve(value);
+      };
+
+      modalDismiss = () => finish(null);
+      cancel.addEventListener("click", () => finish(null));
+      move.addEventListener("click", () => finish("move"));
+      copy.addEventListener("click", () => finish("copy"));
+      modalActions.append(cancel, move, copy);
+      modalBackdrop.hidden = false;
+      copy.focus();
+    });
+  }
+
+  async function handleInternalDrop(paths, destinationPath) {
+    dragState = null;
+    clearDragTargets();
+    if (activeJobId !== null || !Array.isArray(paths) || paths.length === 0 || !destinationPath) return;
+    const action = await chooseDropAction(destinationPath, paths.length);
+    if (!action) return;
+    await runJob(action, paths, destinationPath, false);
+  }
+
   async function refreshAllPanes() {
     const tasks = [];
     if (panes.left.currentPath) tasks.push(panes.left.load(panes.left.currentPath, "refresh"));
@@ -1115,6 +1238,17 @@ tr.entry.cut{opacity:.55}
     }
     applyLayout();
     scheduleSave();
+  });
+
+  window.addEventListener("dragover", event => {
+    if (dragState) event.preventDefault();
+  });
+  window.addEventListener("drop", event => {
+    if (dragState) {
+      event.preventDefault();
+      dragState = null;
+      clearDragTargets();
+    }
   });
 
   window.addEventListener("contextmenu", event => {
