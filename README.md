@@ -1,12 +1,14 @@
 # RemoteHand File Manager
 
-Status: **Planned / parked**
+Status: **v0.1.0 implementation started**
 
 RemoteHand File Manager is intended to be a programmer- and sysadmin-focused file manager integrated into RemoteHand.
 
 The goal is not to clone Windows Explorer. It should provide fast, predictable navigation and file operations that fit naturally into RemoteHand workflows, especially when combined with RemoteHand Editor, local shells, SSH/SFTP, and future plugin integrations.
 
-No implementation work has started yet. The notes below capture the current agreed direction only and are not frozen scope.
+Implementation work has started for the first milestone.
+
+The accepted v0.1.0 scope is documented in [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md). The broader notes below remain long-term product direction and are not all part of v0.1.0.
 
 ## Product direction
 
@@ -422,6 +424,6 @@ Before implementation begins, decide:
 
 ## Development status
 
-**Parked.**
+**v0.1.0 implementation started.**
 
-The repository exists to preserve the design direction. Implementation should begin only after the first milestone is explicitly scoped and the current RemoteHand / Target Monitor work is at an appropriate stopping point.
+The first milestone is explicitly scoped in [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md). Development should proceed in small, testable slices while preserving the broader architecture and deferred-feature boundaries documented here.
