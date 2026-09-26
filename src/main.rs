@@ -229,6 +229,29 @@ impl JobManager {
         control.cancel.store(true, Ordering::Relaxed);
         self.get(id)
     }
+
+    fn active(&self) -> Result<Option<JobSnapshot>, String> {
+        let controls: Vec<Arc<JobControl>> = self
+            .jobs
+            .lock()
+            .map_err(|_| "job store lock poisoned".to_string())?
+            .iter()
+            .rev()
+            .map(|(_, control)| Arc::clone(control))
+            .collect();
+
+        for control in controls {
+            let snapshot = control
+                .snapshot
+                .lock()
+                .map_err(|_| "job state lock poisoned".to_string())?
+                .clone();
+            if matches!(snapshot.state.as_str(), "queued" | "scanning" | "running") {
+                return Ok(Some(snapshot));
+            }
+        }
+        Ok(None)
+    }
 }
 
 fn validate_leaf_name(name: &str) -> Result<&str, String> {
@@ -969,6 +992,9 @@ fn dispatch(
                 .map_err(|error| format!("invalid job-status request: {error}"))?;
             serde_json::to_value(jobs.get(params.id)?).map_err(|error| error.to_string())
         }
+        "fs.job.active" => {
+            serde_json::to_value(jobs.active()?).map_err(|error| error.to_string())
+        }
         "fs.job.cancel" => {
             #[derive(Deserialize)]
             struct Params { id: u64 }
@@ -1171,6 +1197,20 @@ mod tests {
         assert!(error.contains("same destination name"));
 
         fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn job_manager_reports_only_active_jobs() {
+        let manager = JobManager::default();
+        assert!(manager.active().unwrap().is_none());
+
+        let source = PathBuf::from("source");
+        let destination = PathBuf::from("destination");
+        let control = manager.create("copy", &[source], &destination).unwrap();
+        assert_eq!(manager.active().unwrap().unwrap().state, "queued");
+
+        control.snapshot.lock().unwrap().state = "completed".to_string();
+        assert!(manager.active().unwrap().is_none());
     }
 
     #[test]
