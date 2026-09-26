@@ -176,6 +176,103 @@ struct JobManager {
     jobs: Mutex<BTreeMap<u64, Arc<JobControl>>>,
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PropertyScanSnapshot {
+    id: u64,
+    state: String,
+    path: String,
+    files: u64,
+    folders: u64,
+    links: u64,
+    bytes: u64,
+    cancellable: bool,
+    error: Option<String>,
+}
+
+struct PropertyScanControl {
+    snapshot: Mutex<PropertyScanSnapshot>,
+    cancel: AtomicBool,
+}
+
+#[derive(Default)]
+struct PropertyScanManager {
+    next_id: AtomicU64,
+    scans: Mutex<BTreeMap<u64, Arc<PropertyScanControl>>>,
+}
+
+impl PropertyScanManager {
+    fn start(&self, path: &Path) -> Result<u64, String> {
+        let path = ensure_regular_parent(path)?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+        let control = Arc::new(PropertyScanControl {
+            snapshot: Mutex::new(PropertyScanSnapshot {
+                id,
+                state: "scanning".to_string(),
+                path: path_text(&path),
+                files: 0,
+                folders: 0,
+                links: 0,
+                bytes: 0,
+                cancellable: true,
+                error: None,
+            }),
+            cancel: AtomicBool::new(false),
+        });
+        self.scans
+            .lock()
+            .map_err(|_| "property scan store lock poisoned".to_string())?
+            .insert(id, Arc::clone(&control));
+
+        thread::spawn(move || {
+            let outcome = scan_properties_tree(&path, &control);
+            if let Ok(mut snapshot) = control.snapshot.lock() {
+                snapshot.cancellable = false;
+                match outcome {
+                    Ok(()) => snapshot.state = "completed".to_string(),
+                    Err(error) if error == "cancelled" => {
+                        snapshot.state = "cancelled".to_string();
+                        snapshot.error = None;
+                    }
+                    Err(error) => {
+                        snapshot.state = "failed".to_string();
+                        snapshot.error = Some(error);
+                    }
+                }
+            }
+        });
+
+        Ok(id)
+    }
+
+    fn get(&self, id: u64) -> Result<PropertyScanSnapshot, String> {
+        let control = self
+            .scans
+            .lock()
+            .map_err(|_| "property scan store lock poisoned".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("property scan {id} was not found"))?;
+        control
+            .snapshot
+            .lock()
+            .map(|snapshot| snapshot.clone())
+            .map_err(|_| "property scan state lock poisoned".to_string())
+    }
+
+    fn cancel(&self, id: u64) -> Result<PropertyScanSnapshot, String> {
+        let control = self
+            .scans
+            .lock()
+            .map_err(|_| "property scan store lock poisoned".to_string())?
+            .get(&id)
+            .cloned()
+            .ok_or_else(|| format!("property scan {id} was not found"))?;
+        control.cancel.store(true, Ordering::Relaxed);
+        self.get(id)
+    }
+}
+
 impl JobManager {
     fn create(&self, kind: &str, sources: &[PathBuf], destination: &Path) -> Result<Arc<JobControl>, String> {
         let id = self.next_id.fetch_add(1, Ordering::Relaxed).saturating_add(1);
@@ -347,6 +444,66 @@ fn entry_properties(path: &Path) -> Result<Value, String> {
         "linkTarget": link_target,
         "linkTargetKind": target_kind
     }))
+}
+
+fn publish_property_scan(
+    control: &PropertyScanControl,
+    files: u64,
+    folders: u64,
+    links: u64,
+    bytes: u64,
+) -> Result<(), String> {
+    let mut snapshot = control
+        .snapshot
+        .lock()
+        .map_err(|_| "property scan state lock poisoned".to_string())?;
+    snapshot.files = files;
+    snapshot.folders = folders;
+    snapshot.links = links;
+    snapshot.bytes = bytes;
+    Ok(())
+}
+
+fn scan_properties_tree(root: &Path, control: &PropertyScanControl) -> Result<(), String> {
+    fn visit(
+        path: &Path,
+        control: &PropertyScanControl,
+        totals: &mut (u64, u64, u64, u64),
+    ) -> Result<(), String> {
+        if control.cancel.load(Ordering::Relaxed) {
+            return Err("cancelled".to_string());
+        }
+        for item in fs::read_dir(path)
+            .map_err(|error| format!("cannot read {}: {error}", path_text(path)))?
+        {
+            if control.cancel.load(Ordering::Relaxed) {
+                return Err("cancelled".to_string());
+            }
+            let item = item.map_err(|error| format!("failed to read directory entry: {error}"))?;
+            let item_path = item.path();
+            let metadata = fs::symlink_metadata(&item_path)
+                .map_err(|error| format!("cannot inspect {}: {error}", path_text(&item_path)))?;
+
+            if metadata.file_type().is_symlink() {
+                totals.2 = totals.2.saturating_add(1);
+            } else if metadata.is_dir() {
+                totals.1 = totals.1.saturating_add(1);
+                publish_property_scan(control, totals.0, totals.1, totals.2, totals.3)?;
+                visit(&item_path, control, totals)?;
+                continue;
+            } else if metadata.is_file() {
+                totals.0 = totals.0.saturating_add(1);
+                totals.3 = totals.3.saturating_add(metadata.len());
+            }
+
+            publish_property_scan(control, totals.0, totals.1, totals.2, totals.3)?;
+        }
+        Ok(())
+    }
+
+    let mut totals = (0u64, 0u64, 0u64, 0u64);
+    visit(root, control, &mut totals)?;
+    publish_property_scan(control, totals.0, totals.1, totals.2, totals.3)
 }
 
 fn recycle_entries(paths: &[String]) -> Result<Value, String> {
@@ -892,6 +1049,7 @@ fn dispatch(
     request: &HostRequest,
     host_call: &mut dyn FnMut(&str, Value) -> Result<Value, String>,
     jobs: &Arc<JobManager>,
+    property_scans: &Arc<PropertyScanManager>,
 ) -> Result<Value, String> {
     match request.method.as_str() {
         "runtime.ping" => Ok(json!({
@@ -972,6 +1130,27 @@ fn dispatch(
                 .map_err(|error| format!("invalid properties request: {error}"))?;
             entry_properties(Path::new(&params.path))
         }
+        "fs.properties.scan.start" => {
+            #[derive(Deserialize)]
+            struct Params { path: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid properties scan request: {error}"))?;
+            Ok(json!({ "scanId": property_scans.start(Path::new(&params.path))? }))
+        }
+        "fs.properties.scan.get" => {
+            #[derive(Deserialize)]
+            struct Params { id: u64 }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid properties scan status request: {error}"))?;
+            serde_json::to_value(property_scans.get(params.id)?).map_err(|error| error.to_string())
+        }
+        "fs.properties.scan.cancel" => {
+            #[derive(Deserialize)]
+            struct Params { id: u64 }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid properties scan cancel request: {error}"))?;
+            serde_json::to_value(property_scans.cancel(params.id)?).map_err(|error| error.to_string())
+        }
         "fs.job.start" => {
             #[derive(Deserialize)]
             #[serde(rename_all = "camelCase")]
@@ -1034,6 +1213,7 @@ fn run() -> Result<(), String> {
 
     let mut next_host_request_id = 0u64;
     let jobs = Arc::new(JobManager::default());
+    let property_scans = Arc::new(PropertyScanManager::default());
 
     while let Some(payload) = read_frame(&mut stdin)? {
         let request: HostRequest = serde_json::from_slice(&payload)
@@ -1056,7 +1236,7 @@ fn run() -> Result<(), String> {
             )
         };
 
-        let (ok, result, error) = match dispatch(&request, &mut host_call, &jobs) {
+        let (ok, result, error) = match dispatch(&request, &mut host_call, &jobs, &property_scans) {
             Ok(result) => (true, result, String::new()),
             Err(error) => (false, Value::Null, error),
         };
@@ -1195,6 +1375,38 @@ mod tests {
         ];
         let error = start_job(manager, "copy", &sources, &destination).unwrap_err();
         assert!(error.contains("same destination name"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn property_scan_counts_nested_files_and_folders() {
+        let root = temp_dir("property-scan");
+        let nested = root.join("nested");
+        fs::create_dir(&nested).unwrap();
+        fs::write(root.join("one.bin"), vec![1u8; 10]).unwrap();
+        fs::write(nested.join("two.bin"), vec![2u8; 20]).unwrap();
+
+        let control = PropertyScanControl {
+            snapshot: Mutex::new(PropertyScanSnapshot {
+                id: 1,
+                state: "scanning".into(),
+                path: path_text(&root),
+                files: 0,
+                folders: 0,
+                links: 0,
+                bytes: 0,
+                cancellable: true,
+                error: None,
+            }),
+            cancel: AtomicBool::new(false),
+        };
+
+        scan_properties_tree(&root, &control).unwrap();
+        let snapshot = control.snapshot.lock().unwrap();
+        assert_eq!(snapshot.files, 2);
+        assert_eq!(snapshot.folders, 1);
+        assert_eq!(snapshot.bytes, 30);
 
         fs::remove_dir_all(root).unwrap();
     }
