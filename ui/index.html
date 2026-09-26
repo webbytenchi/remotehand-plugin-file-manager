@@ -934,6 +934,20 @@ tr.entry.cut{opacity:.55}
     }
   }
 
+  async function runDeleteJob(sources) {
+    if (activeJobId !== null || !Array.isArray(sources) || sources.length === 0) return;
+    try {
+      const started = await request("fs.job.delete.start", { sources });
+      activeJobId = started.jobId;
+      activeJobCutPaths = null;
+      jobbar.hidden = false;
+      refreshToolbar();
+      await pollJob(activeJobId);
+    } catch (error) {
+      await confirmModal("Delete failed", String(error), "Close");
+    }
+  }
+
   async function pollJob(id) {
     try {
       for (;;) {
@@ -946,10 +960,15 @@ tr.entry.cut{opacity:.55}
         jobprogress.style.width = `${percent}%`;
         const sourceCount = Array.isArray(job.sources) ? job.sources.length : 0;
         const sourceLabel = sourceCount === 1 ? basename(job.sources[0]) : `${sourceCount} selected items`;
-        jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${sourceLabel}`;
-        jobmeta.textContent = job.state === "scanning"
-          ? `Scanning… · ${itemsTotal.toLocaleString()} item${itemsTotal === 1 ? "" : "s"} · ${formatSize(total)} discovered`
-          : `${job.state} · ${itemsDone.toLocaleString()}/${itemsTotal || "?"} items · ${formatSize(done)} / ${formatSize(total)}`;
+        const actionLabel = job.kind === "move" ? "Moving" : job.kind === "delete" ? "Deleting" : "Copying";
+        jobtext.textContent = `${actionLabel} ${sourceLabel}`;
+        if (job.state === "scanning") {
+          jobmeta.textContent = `Scanning… · ${itemsTotal.toLocaleString()} item${itemsTotal === 1 ? "" : "s"} · ${formatSize(total)} discovered`;
+        } else if (job.kind === "delete" && job.state === "deleting") {
+          jobmeta.textContent = `${itemsTotal.toLocaleString()} item${itemsTotal === 1 ? "" : "s"} · ${formatSize(total)} · moving to Recycle Bin/Trash`;
+        } else {
+          jobmeta.textContent = `${job.state} · ${itemsDone.toLocaleString()}/${itemsTotal || "?"} items · ${formatSize(done)} / ${formatSize(total)}`;
+        }
         jobCancel.disabled = !job.cancellable || !["queued","scanning","running"].includes(job.state);
 
         if (["completed","failed","cancelled"].includes(job.state)) {
@@ -960,6 +979,15 @@ tr.entry.cut{opacity:.55}
             && clipboard.mode === "move"
             && clipboard.paths.length === activeJobCutPaths.length
             && clipboard.paths.every(path => activeJobCutPaths.includes(path))
+          ) {
+            clipboard = null;
+          }
+          if (
+            job.state === "completed"
+            && job.kind === "delete"
+            && clipboard
+            && Array.isArray(job.sources)
+            && clipboard.paths.some(path => job.sources.includes(path))
           ) {
             clipboard = null;
           }
@@ -1037,14 +1065,7 @@ tr.entry.cut{opacity:.55}
       : `Move ${entries.length} selected items to the Recycle Bin/Trash?`;
     const ok = await confirmModal("Move to Recycle Bin/Trash", message, "Delete");
     if (!ok) return;
-    try {
-      const paths = entries.map(entry => entry.path);
-      await request("fs.delete-many", { paths });
-      if (clipboard && clipboard.paths.some(path => paths.includes(path))) clipboard = null;
-      await refreshAllPanes();
-    } catch (error) {
-      await confirmModal("Could not delete item", String(error), "Close");
-    }
+    await runDeleteJob(entries.map(entry => entry.path));
   }
 
   async function showProperties() {
@@ -1234,7 +1255,7 @@ tr.entry.cut{opacity:.55}
 
     try {
       const activeJob = await request("fs.job.active");
-      if (activeJob && ["queued", "scanning", "running"].includes(activeJob.state)) {
+      if (activeJob && ["queued", "scanning", "running", "deleting"].includes(activeJob.state)) {
         activeJobId = activeJob.id;
         activeJobCutPaths = null;
         jobbar.hidden = false;
