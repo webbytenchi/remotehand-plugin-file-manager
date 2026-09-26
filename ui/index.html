@@ -773,7 +773,7 @@ tr.entry.cut{opacity:.55}
         jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${sourceLabel}`;
         jobmeta.textContent = job.state === "scanning"
           ? `Scanning… · ${itemsTotal.toLocaleString()} item${itemsTotal === 1 ? "" : "s"} · ${formatSize(total)} discovered`
-          : `${job.state} · ${itemsDone.toLocaleString()}/${itemsTotal || "?"} items`;
+          : `${job.state} · ${itemsDone.toLocaleString()}/${itemsTotal || "?"} items · ${formatSize(done)} / ${formatSize(total)}`;
         jobCancel.disabled = !job.cancellable || !["queued","scanning","running"].includes(job.state);
 
         if (["completed","failed","cancelled"].includes(job.state)) {
