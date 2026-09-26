@@ -326,15 +326,6 @@ fn entry_properties(path: &Path) -> Result<Value, String> {
     }))
 }
 
-fn recycle_entry(path: &Path) -> Result<Value, String> {
-    if fs::symlink_metadata(path).is_err() {
-        return Err(format!("cannot find {}", path_text(path)));
-    }
-    trash::delete(path)
-        .map_err(|error| format!("cannot move {} to Recycle Bin/Trash: {error}", path_text(path)))?;
-    Ok(json!({ "deleted": true }))
-}
-
 fn recycle_entries(paths: &[String]) -> Result<Value, String> {
     if paths.is_empty() {
         return Err("at least one path is required".to_string());
@@ -346,9 +337,10 @@ fn recycle_entries(paths: &[String]) -> Result<Value, String> {
         .iter()
         .map(|path| resolve_entry_without_following(Path::new(path)))
         .collect::<Result<_, _>>()?;
-    for path in &resolved {
-        recycle_entry(path)?;
-    }
+
+    trash::delete_all(&resolved)
+        .map_err(|error| format!("cannot move selected item(s) to Recycle Bin/Trash: {error}"))?;
+
     Ok(json!({ "deleted": resolved.len() }))
 }
 
@@ -917,7 +909,7 @@ fn dispatch(
             struct Params { path: String }
             let params: Params = serde_json::from_value(request.params.clone())
                 .map_err(|error| format!("invalid delete request: {error}"))?;
-            recycle_entry(Path::new(&params.path))
+            recycle_entries(&[params.path])
         }
         "fs.deleteMany" => {
             #[derive(Deserialize)]
