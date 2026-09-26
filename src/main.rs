@@ -29,8 +29,8 @@ struct HostReady {
     message_type: String,
     plugin_id: String,
     api_version: u32,
-    #[serde(default)]
-    granted_permissions: Vec<String>,
+    #[serde(default, rename = "grantedPermissions")]
+    _granted_permissions: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
