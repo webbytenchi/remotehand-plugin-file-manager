@@ -58,6 +58,8 @@ struct DirectoryEntry {
     name: String,
     path: String,
     kind: EntryKind,
+    link_target_kind: Option<EntryKind>,
+    broken_link: bool,
     size: Option<u64>,
     modified_ms: Option<u64>,
     hidden: bool,
@@ -196,12 +198,22 @@ fn list_directory(path: &Path) -> Result<Value, String> {
         let metadata = fs::symlink_metadata(&item_path)
             .map_err(|error| format!("cannot inspect {}: {error}", path_text(&item_path)))?;
         let kind = entry_kind(&metadata);
+        let (link_target_kind, broken_link) = if matches!(&kind, EntryKind::Symlink) {
+            match fs::metadata(&item_path) {
+                Ok(target_metadata) => (Some(entry_kind(&target_metadata)), false),
+                Err(_) => (None, true),
+            }
+        } else {
+            (None, false)
+        };
         entries.push(DirectoryEntry {
             name: item.file_name().to_string_lossy().into_owned(),
             path: path_text(&item_path),
             size: matches!(&kind, EntryKind::File).then_some(metadata.len()),
             modified_ms: modified_ms(&metadata),
             hidden: is_hidden(&item_path, &metadata),
+            link_target_kind,
+            broken_link,
             kind,
         });
     }
@@ -367,6 +379,25 @@ mod tests {
 
         let error = list_directory(&file).unwrap_err();
         assert!(error.contains("not a directory"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn list_directory_reports_symlink_target_kind() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir("symlink");
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        symlink(&target, root.join("link")).unwrap();
+
+        let value = list_directory(&root).unwrap();
+        let entries = value["entries"].as_array().unwrap();
+        let link = entries.iter().find(|entry| entry["name"] == "link").unwrap();
+        assert_eq!(link["kind"], "symlink");
+        assert_eq!(link["linkTargetKind"], "directory");
+        assert_eq!(link["brokenLink"], false);
 
         fs::remove_dir_all(root).unwrap();
     }
