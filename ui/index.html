@@ -174,7 +174,7 @@ tr.entry.cut{opacity:.55}
   let saveTimer = null;
   let clipboard = null;
   let activeJobId = null;
-  let activeJobCutPath = null;
+  let activeJobCutPaths = null;
   let modalDismiss = null;
   const panes = {};
 
@@ -294,28 +294,34 @@ tr.entry.cut{opacity:.55}
     return [{ label: normalized, path: normalized }];
   }
 
+  function selectedEntries(pane = activePane()) {
+    if (!pane) return [];
+    return pane.entries.filter(entry => pane.selectedPaths.has(entry.path));
+  }
+
   function selectedEntry(pane = activePane()) {
-    if (!pane || !pane.selectedPath) return null;
-    return pane.entries.find(entry => entry.path === pane.selectedPath) || null;
+    const selected = selectedEntries(pane);
+    return selected.length === 1 ? selected[0] : null;
   }
 
   function refreshToolbar() {
     const pane = activePane();
-    const selected = selectedEntry(pane);
+    const selected = selectedEntries(pane);
+    const selectedCount = selected.length;
     const operationRunning = activeJobId !== null;
     controls.newFolder.disabled = !pane || !pane.currentPath || operationRunning;
-    controls.copy.disabled = !selected || operationRunning;
-    controls.cut.disabled = !selected || operationRunning;
+    controls.copy.disabled = selectedCount === 0 || operationRunning;
+    controls.cut.disabled = selectedCount === 0 || operationRunning;
     controls.paste.disabled = !clipboard || !pane || !pane.currentPath || operationRunning;
-    controls.rename.disabled = !selected || operationRunning;
-    controls.delete.disabled = !selected || operationRunning;
-    controls.properties.disabled = !selected;
+    controls.rename.disabled = selectedCount !== 1 || operationRunning;
+    controls.delete.disabled = selectedCount === 0 || operationRunning;
+    controls.properties.disabled = selectedCount !== 1;
     const otherVisible = dualPane;
     controls.otherSep.hidden = !otherVisible;
     controls.copyOther.hidden = !otherVisible;
     controls.moveOther.hidden = !otherVisible;
-    controls.copyOther.disabled = !selected || operationRunning;
-    controls.moveOther.disabled = !selected || operationRunning;
+    controls.copyOther.disabled = selectedCount === 0 || operationRunning;
+    controls.moveOther.disabled = selectedCount === 0 || operationRunning;
   }
 
   class BrowserPane {
@@ -326,7 +332,8 @@ tr.entry.cut{opacity:.55}
       this.entries = [];
       this.back = [];
       this.forward = [];
-      this.selectedPath = null;
+      this.selectedPaths = new Set();
+      this.selectionAnchorIndex = null;
       this.busy = false;
 
       const fragment = paneTemplate.content.cloneNode(true);
@@ -438,8 +445,8 @@ tr.entry.cut{opacity:.55}
       for (const entry of this.entries) {
         const row = document.createElement("tr");
         row.className = "entry";
-        if (entry.path === this.selectedPath) row.classList.add("selected");
-        if (clipboard && clipboard.mode === "move" && clipboard.path === entry.path) row.classList.add("cut");
+        if (this.selectedPaths.has(entry.path)) row.classList.add("selected");
+        if (clipboard && clipboard.mode === "move" && clipboard.paths.includes(entry.path)) row.classList.add("cut");
         row.tabIndex = 0;
 
         const nameCell = document.createElement("td");
@@ -462,9 +469,26 @@ tr.entry.cut{opacity:.55}
         modifiedCell.textContent = formatModified(entry.modifiedMs);
         row.append(nameCell, typeCell, sizeCell, modifiedCell);
 
-        row.addEventListener("click", () => {
+        const entryIndex = this.entries.indexOf(entry);
+        row.addEventListener("click", event => {
           setActivePane(this.id);
-          this.selectedPath = entry.path;
+
+          if (event.shiftKey && this.selectionAnchorIndex !== null) {
+            const start = Math.min(this.selectionAnchorIndex, entryIndex);
+            const end = Math.max(this.selectionAnchorIndex, entryIndex);
+            const range = this.entries.slice(start, end + 1).map(item => item.path);
+            if (!(event.ctrlKey || event.metaKey)) this.selectedPaths.clear();
+            for (const path of range) this.selectedPaths.add(path);
+          } else if (event.ctrlKey || event.metaKey) {
+            if (this.selectedPaths.has(entry.path)) this.selectedPaths.delete(entry.path);
+            else this.selectedPaths.add(entry.path);
+            this.selectionAnchorIndex = entryIndex;
+          } else {
+            this.selectedPaths.clear();
+            this.selectedPaths.add(entry.path);
+            this.selectionAnchorIndex = entryIndex;
+          }
+
           this.render();
           refreshToolbar();
         });
@@ -482,7 +506,10 @@ tr.entry.cut{opacity:.55}
       }
 
       this.status.classList.remove("error");
-      this.status.textContent = `${this.entries.length} item${this.entries.length === 1 ? "" : "s"}`;
+      const selectedCount = this.selectedPaths.size;
+      this.status.textContent = selectedCount > 0
+        ? `${selectedCount} selected · ${this.entries.length} item${this.entries.length === 1 ? "" : "s"}`
+        : `${this.entries.length} item${this.entries.length === 1 ? "" : "s"}`;
       this.updateButtons();
       refreshToolbar();
     }
@@ -502,7 +529,8 @@ tr.entry.cut{opacity:.55}
         this.currentPath = result.path;
         this.parentPath = result.parent || null;
         this.entries = Array.isArray(result.entries) ? result.entries : [];
-        this.selectedPath = null;
+        this.selectedPaths.clear();
+        this.selectionAnchorIndex = null;
         this.pathInput.value = this.currentPath;
         this.renderBreadcrumbs();
         this.render();
@@ -701,19 +729,23 @@ tr.entry.cut{opacity:.55}
   }
 
   function setClipboard(mode) {
-    const entry = selectedEntry();
-    if (!entry || activeJobId !== null) return;
-    clipboard = { mode, path: entry.path, name: entry.name };
+    const entries = selectedEntries();
+    if (entries.length === 0 || activeJobId !== null) return;
+    clipboard = {
+      mode,
+      paths: entries.map(entry => entry.path),
+      names: entries.map(entry => entry.name)
+    };
     for (const pane of Object.values(panes)) pane.render();
     refreshToolbar();
   }
 
-  async function runJob(kind, source, destinationDir, clearCutOnSuccess = false) {
-    if (activeJobId !== null) return;
+  async function runJob(kind, sources, destinationDir, clearCutOnSuccess = false) {
+    if (activeJobId !== null || !Array.isArray(sources) || sources.length === 0) return;
     try {
-      const started = await request("fs.job.start", { kind, source, destinationDir });
+      const started = await request("fs.job.start", { kind, sources, destinationDir });
       activeJobId = started.jobId;
-      activeJobCutPath = clearCutOnSuccess ? source : null;
+      activeJobCutPaths = clearCutOnSuccess ? [...sources] : null;
       jobbar.hidden = false;
       refreshToolbar();
       await pollJob(activeJobId);
@@ -732,18 +764,27 @@ tr.entry.cut{opacity:.55}
         const itemsDone = Number(job.itemsDone || 0);
         const percent = total > 0 ? Math.min(100, (done / total) * 100) : (itemsTotal > 0 ? Math.min(100, (itemsDone / itemsTotal) * 100) : 0);
         jobprogress.style.width = `${percent}%`;
-        jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${basename(job.source)}`;
+        const sourceCount = Array.isArray(job.sources) ? job.sources.length : 0;
+        const sourceLabel = sourceCount === 1 ? basename(job.sources[0]) : `${sourceCount} selected items`;
+        jobtext.textContent = `${job.kind === "move" ? "Moving" : "Copying"} ${sourceLabel}`;
         jobmeta.textContent = job.state === "scanning"
           ? "Scanning…"
           : `${job.state} · ${itemsDone}/${itemsTotal || "?"} items`;
         jobCancel.disabled = !job.cancellable || !["queued","scanning","running"].includes(job.state);
 
         if (["completed","failed","cancelled"].includes(job.state)) {
-          if (job.state === "completed" && activeJobCutPath && clipboard && clipboard.mode === "move" && clipboard.path === activeJobCutPath) {
+          if (
+            job.state === "completed"
+            && activeJobCutPaths
+            && clipboard
+            && clipboard.mode === "move"
+            && clipboard.paths.length === activeJobCutPaths.length
+            && clipboard.paths.every(path => activeJobCutPaths.includes(path))
+          ) {
             clipboard = null;
           }
           activeJobId = null;
-          activeJobCutPath = null;
+          activeJobCutPaths = null;
           refreshToolbar();
           await refreshAllPanes();
           for (const pane of Object.values(panes)) pane.render();
@@ -768,7 +809,7 @@ tr.entry.cut{opacity:.55}
       }
     } catch (error) {
       activeJobId = null;
-      activeJobCutPath = null;
+      activeJobCutPaths = null;
       jobbar.hidden = true;
       refreshToolbar();
       await confirmModal("File operation failed", String(error), "Close");
@@ -778,7 +819,7 @@ tr.entry.cut{opacity:.55}
   async function pasteClipboard() {
     const pane = activePane();
     if (!clipboard || !pane.currentPath || activeJobId !== null) return;
-    await runJob(clipboard.mode === "move" ? "move" : "copy", clipboard.path, pane.currentPath, clipboard.mode === "move");
+    await runJob(clipboard.mode === "move" ? "move" : "copy", clipboard.paths, pane.currentPath, clipboard.mode === "move");
   }
 
   async function createFolder() {
@@ -809,18 +850,17 @@ tr.entry.cut{opacity:.55}
   }
 
   async function deleteSelected() {
-    const pane = activePane();
-    const entry = selectedEntry(pane);
-    if (!entry || activeJobId !== null) return;
-    const ok = await confirmModal(
-      "Move to Recycle Bin/Trash",
-      `Move “${entry.name}” to the Recycle Bin/Trash?`,
-      "Delete"
-    );
+    const entries = selectedEntries();
+    if (entries.length === 0 || activeJobId !== null) return;
+    const message = entries.length === 1
+      ? `Move “${entries[0].name}” to the Recycle Bin/Trash?`
+      : `Move ${entries.length} selected items to the Recycle Bin/Trash?`;
+    const ok = await confirmModal("Move to Recycle Bin/Trash", message, "Delete");
     if (!ok) return;
     try {
-      await request("fs.delete", { path: entry.path });
-      if (clipboard && clipboard.path === entry.path) clipboard = null;
+      const paths = entries.map(entry => entry.path);
+      await request("fs.deleteMany", { paths });
+      if (clipboard && clipboard.paths.some(path => paths.includes(path))) clipboard = null;
       await refreshAllPanes();
     } catch (error) {
       await confirmModal("Could not delete item", String(error), "Close");
@@ -840,10 +880,10 @@ tr.entry.cut{opacity:.55}
 
   async function sendToOther(kind) {
     if (!dualPane || activeJobId !== null) return;
-    const entry = selectedEntry();
+    const entries = selectedEntries();
     const destination = otherPane();
-    if (!entry || !destination.currentPath) return;
-    await runJob(kind, entry.path, destination.currentPath, false);
+    if (entries.length === 0 || !destination.currentPath) return;
+    await runJob(kind, entries.map(entry => entry.path), destination.currentPath, false);
   }
 
   controls.newFolder.addEventListener("click", createFolder);
@@ -896,6 +936,17 @@ tr.entry.cut{opacity:.55}
     }
     const pane = activePane();
     const key = event.key.toLowerCase();
+    const typing = event.target instanceof HTMLInputElement || event.target.isContentEditable;
+    if (typing) return;
+
+    if (event.ctrlKey && key === "a") {
+      event.preventDefault();
+      pane.selectedPaths = new Set(pane.entries.map(entry => entry.path));
+      pane.selectionAnchorIndex = pane.entries.length > 0 ? 0 : null;
+      pane.render();
+      refreshToolbar();
+      return;
+    }
 
     if (event.ctrlKey && event.shiftKey && key === "n") {
       event.preventDefault();
