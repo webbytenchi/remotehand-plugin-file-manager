@@ -1,0 +1,42 @@
+{
+  "id": "remotehand.file-manager",
+  "name": "RemoteHand File Manager",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "author": "RemoteHand",
+  "description": "Local filesystem browsing and file operations for RemoteHand.",
+  "runtime": {
+    "kind": "executable",
+    "entrypoints": {
+      "windows-x86_64": "bin/windows-x86_64/remotehand-file-manager.exe",
+      "linux-x86_64": "bin/linux-x86_64/remotehand-file-manager",
+      "linux-aarch64": "bin/linux-aarch64/remotehand-file-manager"
+    }
+  },
+  "permissions": [
+    "storage.plugin"
+  ],
+  "contributes": {
+    "sidebar": [
+      {
+        "id": "file-manager",
+        "title": "File Manager",
+        "icon": "assets/sidebar.svg",
+        "panel": "file-manager"
+      }
+    ],
+    "panels": [
+      {
+        "id": "file-manager",
+        "title": "File Manager",
+        "entry": "ui/index.html"
+      }
+    ],
+    "commands": [
+      {
+        "id": "open",
+        "title": "Open File Manager"
+      }
+    ]
+  }
+}
