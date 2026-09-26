@@ -255,6 +255,21 @@ fn ensure_regular_parent(path: &Path) -> Result<PathBuf, String> {
     Ok(canonical)
 }
 
+fn resolve_entry_without_following(path: &Path) -> Result<PathBuf, String> {
+    let name = path
+        .file_name()
+        .ok_or_else(|| "operation is not supported on a filesystem root".to_string())?;
+    let parent = path
+        .parent()
+        .ok_or_else(|| "cannot resolve entry parent".to_string())?;
+    let parent = dunce::canonicalize(parent)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(parent)))?;
+    let resolved = parent.join(name);
+    fs::symlink_metadata(&resolved)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(&resolved)))?;
+    Ok(resolved)
+}
+
 fn create_folder(parent: &Path, name: &str) -> Result<Value, String> {
     let parent = ensure_regular_parent(parent)?;
     let name = validate_leaf_name(name)?;
@@ -268,8 +283,7 @@ fn create_folder(parent: &Path, name: &str) -> Result<Value, String> {
 }
 
 fn rename_entry(path: &Path, name: &str) -> Result<Value, String> {
-    let source = dunce::canonicalize(path)
-        .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
+    let source = resolve_entry_without_following(path)?;
     let name = validate_leaf_name(name)?;
     let parent = source
         .parent()
@@ -463,8 +477,7 @@ fn cleanup_partial_destination(path: &Path) {
 }
 
 fn validate_job_paths(source: &Path, destination_dir: &Path) -> Result<(PathBuf, PathBuf), String> {
-    let source = dunce::canonicalize(source)
-        .map_err(|error| format!("cannot open {}: {error}", path_text(source)))?;
+    let source = resolve_entry_without_following(source)?;
     let destination_dir = ensure_regular_parent(destination_dir)?;
     let name = source
         .file_name()
@@ -1048,6 +1061,22 @@ mod tests {
         assert!(state.dual_pane);
     }
 
+
+    #[cfg(unix)]
+    #[test]
+    fn resolve_entry_without_following_preserves_symlink() {
+        use std::os::unix::fs::symlink;
+        let root = temp_dir("resolve-link");
+        let target = root.join("target");
+        fs::create_dir(&target).unwrap();
+        let link = root.join("link");
+        symlink(&target, &link).unwrap();
+
+        let resolved = resolve_entry_without_following(&link).unwrap();
+        assert!(fs::symlink_metadata(&resolved).unwrap().file_type().is_symlink());
+
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn validate_leaf_name_rejects_paths() {
