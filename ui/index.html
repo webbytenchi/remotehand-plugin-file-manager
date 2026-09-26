@@ -1028,6 +1028,14 @@ tr.entry.cut{opacity:.55}
     scheduleSave();
   });
 
+  window.addEventListener("contextmenu", event => {
+    const target = event.target;
+    const editable = target instanceof HTMLInputElement
+      || target instanceof HTMLTextAreaElement
+      || (target instanceof HTMLElement && target.isContentEditable);
+    if (!editable) event.preventDefault();
+  }, { capture: true });
+
   window.addEventListener("mousedown", event => {
     if (!contextMenu.hidden && !contextMenu.contains(event.target)) hideContextMenu();
     if (event.button === 3) {
