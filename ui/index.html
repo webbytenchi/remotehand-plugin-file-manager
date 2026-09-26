@@ -40,7 +40,11 @@ tr.entry{cursor:default}
 tr.entry:hover{background:var(--remotehand-surface-raised,#1d2630)}
 tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
 .name-cell{display:flex;align-items:center;gap:8px;min-width:0}
-.icon{width:18px;flex:0 0 18px;text-align:center}
+.icon{width:18px;height:18px;flex:0 0 18px;display:inline-flex;align-items:center;justify-content:center;color:var(--remotehand-muted-text,#93a1b2)}
+.icon svg{width:18px;height:18px;display:block}
+.icon.directory{color:var(--remotehand-accent,#579ce7)}
+.icon.symlink{color:var(--remotehand-muted-text,#93a1b2)}
+.icon.broken{color:var(--remotehand-danger-text,#ffc6c6)}
 .name{overflow:hidden;text-overflow:ellipsis}
 .empty{padding:28px 14px;text-align:center;color:var(--remotehand-muted-text,#93a1b2)}
 </style>
@@ -103,19 +107,42 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
   const refreshButton = document.getElementById("refresh");
   const refreshTop = document.getElementById("refreshTop");
 
-  const kindLabel = kind => ({
-    directory: "Folder",
-    file: "File",
-    symlink: "Link",
-    other: "Other"
-  }[kind] || kind);
+  const kindLabel = entry => {
+    if (entry.kind === "symlink") {
+      if (entry.brokenLink) return "Broken link";
+      if (entry.linkTargetKind === "directory") return "Folder link";
+      if (entry.linkTargetKind === "file") return "File link";
+      return "Link";
+    }
+    return ({
+      directory: "Folder",
+      file: "File",
+      other: "Other"
+    }[entry.kind] || entry.kind);
+  };
 
-  const kindIcon = kind => ({
-    directory: "📁",
-    file: "📄",
-    symlink: "↗",
-    other: "•"
-  }[kind] || "•");
+  const iconSvg = (entry) => {
+    const base = (() => {
+      if (entry.kind === "directory") {
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.5A2.5 2.5 0 0 1 5.5 3H10l2 2h6.5A2.5 2.5 0 0 1 21 7.5v9A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5v-11Zm2.5-.5a.5.5 0 0 0-.5.5V7h14a2.5 2.5 0 0 1 2 .99V7.5a.5.5 0 0 0-.5-.5h-7.33l-2-2H5.5ZM5 9v7.5a.5.5 0 0 0 .5.5h13a.5.5 0 0 0 .5-.5v-7a.5.5 0 0 0-.5-.5H5Z"/></svg>';
+      }
+      if (entry.kind === "symlink") {
+        const targetFolder = entry.linkTargetKind === "directory";
+        const shape = targetFolder
+          ? '<path fill="currentColor" d="M3 6a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6Z"/>'
+          : '<path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/>';
+        const overlay = entry.brokenLink
+          ? '<path d="M14.5 14.5 20 20M20 14.5 14.5 20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>'
+          : '<path d="M13.5 10.5h6m0 0-2.5-2.5m2.5 2.5L17 13" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>';
+        return '<svg viewBox="0 0 24 24" aria-hidden="true">' + shape + overlay + '</svg>';
+      }
+      if (entry.kind === "file") {
+        return '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M6 3h8l4 4v14H6V3Zm8 1.8V8h3.2L14 4.8Z"/></svg>';
+      }
+      return '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3" fill="currentColor"/></svg>';
+    })();
+    return base;
+  };
 
   const formatSize = size => {
     if (size === null || size === undefined) return "";
@@ -249,8 +276,8 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       const nameWrap = document.createElement("div");
       nameWrap.className = "name-cell";
       const icon = document.createElement("span");
-      icon.className = "icon";
-      icon.textContent = kindIcon(entry.kind);
+      icon.className = "icon " + entry.kind + (entry.brokenLink ? " broken" : "");
+      icon.innerHTML = iconSvg(entry);
       const name = document.createElement("span");
       name.className = "name";
       name.textContent = entry.name;
@@ -258,7 +285,7 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
       nameCell.append(nameWrap);
 
       const typeCell = document.createElement("td");
-      typeCell.textContent = kindLabel(entry.kind);
+      typeCell.textContent = kindLabel(entry);
       const sizeCell = document.createElement("td");
       sizeCell.textContent = formatSize(entry.size);
       const modifiedCell = document.createElement("td");
@@ -271,12 +298,15 @@ tr.entry.selected{background:var(--remotehand-accent-surface,#19304a)}
         render();
       });
 
+      const canNavigate = entry.kind === "directory"
+        || (entry.kind === "symlink" && entry.linkTargetKind === "directory" && !entry.brokenLink);
+
       row.addEventListener("dblclick", () => {
-        if (entry.kind === "directory") navigate(entry.path);
+        if (canNavigate) navigate(entry.path);
       });
 
       row.addEventListener("keydown", event => {
-        if (event.key === "Enter" && entry.kind === "directory") {
+        if (event.key === "Enter" && canNavigate) {
           event.preventDefault();
           navigate(entry.path);
         }
