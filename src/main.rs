@@ -344,7 +344,22 @@ fn recycle_entries(paths: &[String]) -> Result<Value, String> {
     Ok(json!({ "deleted": resolved.len() }))
 }
 
-fn scan_tree(path: &Path, totals: &mut (u64, u64), cancel: &AtomicBool) -> Result<(), String> {
+fn publish_scan_totals(control: &JobControl, totals: (u64, u64)) -> Result<(), String> {
+    let mut snapshot = control
+        .snapshot
+        .lock()
+        .map_err(|_| "job state lock poisoned".to_string())?;
+    snapshot.bytes_total = totals.0;
+    snapshot.items_total = totals.1;
+    Ok(())
+}
+
+fn scan_tree(
+    path: &Path,
+    totals: &mut (u64, u64),
+    cancel: &AtomicBool,
+    progress: Option<&JobControl>,
+) -> Result<(), String> {
     if cancel.load(Ordering::Relaxed) {
         return Err("cancelled".to_string());
     }
@@ -352,18 +367,27 @@ fn scan_tree(path: &Path, totals: &mut (u64, u64), cancel: &AtomicBool) -> Resul
         .map_err(|error| format!("cannot inspect {}: {error}", path_text(path)))?;
     totals.1 = totals.1.saturating_add(1);
     if metadata.file_type().is_symlink() {
+        if let Some(control) = progress {
+            publish_scan_totals(control, *totals)?;
+        }
         return Ok(());
     }
     if metadata.is_file() {
         totals.0 = totals.0.saturating_add(metadata.len());
+        if let Some(control) = progress {
+            publish_scan_totals(control, *totals)?;
+        }
         return Ok(());
     }
     if metadata.is_dir() {
+        if let Some(control) = progress {
+            publish_scan_totals(control, *totals)?;
+        }
         for item in fs::read_dir(path)
             .map_err(|error| format!("cannot read {}: {error}", path_text(path)))?
         {
             let item = item.map_err(|error| format!("failed to read directory entry: {error}"))?;
-            scan_tree(&item.path(), totals, cancel)?;
+            scan_tree(&item.path(), totals, cancel, progress)?;
         }
         return Ok(());
     }
@@ -565,7 +589,7 @@ fn start_job(
 
             let mut totals = (0u64, 0u64);
             for source in &sources {
-                scan_tree(source, &mut totals, &control_for_thread.cancel)?;
+                scan_tree(source, &mut totals, &control_for_thread.cancel, Some(&control_for_thread))?;
             }
             {
                 let mut snapshot = control_for_thread
@@ -586,7 +610,7 @@ fn start_job(
                     if fs::rename(source, destination).is_ok() {
                         let item_totals = {
                             let mut totals = (0u64, 0u64);
-                            scan_tree(destination, &mut totals, &AtomicBool::new(false))?;
+                            scan_tree(destination, &mut totals, &AtomicBool::new(false), None)?;
                             totals
                         };
                         note_progress(&control_for_thread, item_totals.0, item_totals.1)?;
@@ -1145,6 +1169,38 @@ mod tests {
         ];
         let error = start_job(manager, "copy", &sources, &destination).unwrap_err();
         assert!(error.contains("same destination name"));
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn scan_tree_publishes_live_totals() {
+        let root = temp_dir("scan-progress");
+        fs::write(root.join("one.bin"), vec![1u8; 10]).unwrap();
+        fs::write(root.join("two.bin"), vec![2u8; 20]).unwrap();
+
+        let control = JobControl {
+            snapshot: Mutex::new(JobSnapshot {
+                id: 1,
+                kind: "copy".into(),
+                state: "scanning".into(),
+                sources: vec![path_text(&root)],
+                destination: String::new(),
+                bytes_total: 0,
+                bytes_done: 0,
+                items_total: 0,
+                items_done: 0,
+                cancellable: true,
+                error: None,
+            }),
+            cancel: AtomicBool::new(false),
+        };
+
+        let mut totals = (0u64, 0u64);
+        scan_tree(&root, &mut totals, &control.cancel, Some(&control)).unwrap();
+        let snapshot = control.snapshot.lock().unwrap();
+        assert_eq!(snapshot.bytes_total, 30);
+        assert_eq!(snapshot.items_total, 3);
 
         fs::remove_dir_all(root).unwrap();
     }
