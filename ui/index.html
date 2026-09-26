@@ -21,6 +21,7 @@ button.toggle[aria-pressed="true"]{border-color:var(--remotehand-accent-border,#
 .toolbar{display:flex;align-items:center;gap:5px;min-width:0;overflow:auto}
 .tool{width:34px;height:32px;padding:6px;display:inline-flex;align-items:center;justify-content:center;flex:0 0 auto}
 .tool svg{width:18px;height:18px;display:block}
+.tool.mirror svg{transform:scaleX(-1)}
 .tool-sep{width:1px;height:22px;background:var(--remotehand-border,#384451);margin:0 2px;flex:0 0 auto}
 .panes{min-height:0;flex:1;display:grid;grid-template-columns:minmax(0,1fr);gap:10px}
 .panes.dual{grid-template-columns:minmax(0,1fr) minmax(0,1fr)}
@@ -322,6 +323,9 @@ tr.entry.cut{opacity:.55}
     controls.moveOther.hidden = !otherVisible;
     controls.copyOther.disabled = selectedCount === 0 || operationRunning;
     controls.moveOther.disabled = selectedCount === 0 || operationRunning;
+    const mirrorOtherPaneIcons = activePaneId === "right";
+    controls.copyOther.classList.toggle("mirror", mirrorOtherPaneIcons);
+    controls.moveOther.classList.toggle("mirror", mirrorOtherPaneIcons);
   }
 
   class BrowserPane {
