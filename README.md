@@ -2,9 +2,25 @@
 
 RemoteHand File Manager is a local filesystem browser and file-operation plugin for RemoteHand.
 
-Version **0.1.0** establishes the first complete local-file-management milestone with a Windows-first acceptance target and cross-platform design.
+Version **0.2.0** adds file-opening integration on top of the established local-file-management foundation.
 
-## v0.1.0 highlights
+## Requirements
+
+RemoteHand File Manager v0.2.0 requires **RemoteHand v1.2.20 or later** for the generic `plugins.open` host capability.
+
+**Open in Editor** additionally requires **RemoteHand Editor v0.2.0 or later** to receive and open the selected file path.
+
+## v0.2.0 highlights
+
+- Open supported text/code files directly in RemoteHand Editor
+- Reuse the existing Editor tab when the selected file is already open
+- Show **Open in Editor** only while Editor is installed and enabled
+- Refresh Editor availability when the file context menu opens
+- Open regular files with the operating system's registered/default application
+
+## File Manager foundation
+
+The v0.1.0 browsing and file-operation foundation remains included:
 
 - Single-pane and dual-pane layouts
 - Persisted pane paths, layout, and active pane
@@ -38,7 +54,7 @@ Delete uses Recycle Bin / Trash semantics. Its pre-delete scan can be cancelled.
 
 ## Drag-and-drop
 
-v0.1.0 supports **internal File Manager drag-and-drop**:
+File Manager supports **internal File Manager drag-and-drop**:
 
 - between panes
 - onto folders
@@ -46,7 +62,7 @@ v0.1.0 supports **internal File Manager drag-and-drop**:
 
 A drop asks whether to **Copy here**, **Move here**, or cancel.
 
-External operating-system drag-and-drop, such as dragging between Windows Explorer and RemoteHand, is not part of v0.1.0.
+External operating-system drag-and-drop, such as dragging between Windows Explorer and RemoteHand, remains deferred.
 
 ## Properties
 
@@ -93,11 +109,11 @@ File Manager treats recursive filesystem operations conservatively:
 
 ## Platform direction
 
-v0.1.0 has been accepted primarily on Windows.
+File Manager has been accepted primarily on Windows.
 
 The plugin is designed to remain portable to Linux, including platform-appropriate path, symlink, and Trash behavior. Linux acceptance and packaging can be expanded independently without moving file-manager semantics into RemoteHand core.
 
-## Deferred beyond v0.1.0
+## Deferred
 
 The first release intentionally does not include:
 
@@ -112,12 +128,10 @@ The first release intentionally does not include:
 - directory comparison
 - rich previews
 - recursive filesystem search/indexing
-- Editor integration
 - SFTP integration
 - generic cross-plugin action/intent contracts
 - column sorting controls
 - hidden-files toggle
-- opening regular files with the OS default application
 
 These can be added in later milestones without destabilizing the v0.1.0 foundation.
 
@@ -136,4 +150,4 @@ RemoteHand File Manager owns:
 
 The plugin does not require RemoteHand core to hard-code File Manager behavior.
 
-See [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md) for the finalized first-milestone design and [CHANGELOG.md](CHANGELOG.md) for release history.
+See [V0.1.0-DESIGN.md](V0.1.0-DESIGN.md) for the original foundation design and [CHANGELOG.md](CHANGELOG.md) for release history.

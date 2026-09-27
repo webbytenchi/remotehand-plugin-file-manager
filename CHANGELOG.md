@@ -2,6 +2,27 @@
 
 All notable changes to RemoteHand File Manager are documented here.
 
+## v0.2.0 - 2026-09-28
+
+### Integration
+
+- Added **Open in Editor** for supported text/code files when RemoteHand Editor is installed and enabled.
+- Added **Open with System App** for regular files, using the operating system's registered/default application.
+- Reopening a file through **Open in Editor** reuses the existing Editor tab when that file is already open.
+- Editor availability is refreshed whenever the context menu opens on a supported file, so enabling or disabling Editor is reflected immediately.
+- The final **Open in Editor** action revalidates the selected file and routes the path through RemoteHand's generic plugin-panel host API.
+
+### Compatibility
+
+- Requires **RemoteHand v1.2.20 or later** for the `plugins.open` host permission/API.
+- **Open in Editor** requires **RemoteHand Editor v0.2.0 or later**.
+- Existing File Manager browsing and file-operation behavior remains unchanged.
+
+### Verification
+
+- Added targeted tests for text/code classification, Editor availability reporting, and Editor panel routing.
+- Manual Windows acceptance confirmed system-app opening, Editor opening, existing-tab reuse, and immediate enable/disable availability updates.
+
 ## v0.1.0
 
 Initial release.

@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, ErrorKind, Read, Write};
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, AtomicU64, Ordering},
     Arc, Mutex,
@@ -1109,6 +1110,65 @@ fn kind_rank(kind: &EntryKind) -> u8 {
     }
 }
 
+fn is_text_like_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
+        return false;
+    };
+    let Some(extension) = path.extension().and_then(|value| value.to_str()) else {
+        return true;
+    };
+    let extension = extension.to_ascii_lowercase();
+    matches!(
+        extension.as_str(),
+        "txt" | "md" | "markdown" | "log" | "json" | "jsonc" | "yaml" | "yml" |
+        "toml" | "ini" | "cfg" | "conf" | "xml" | "html" | "htm" | "css" | "scss" |
+        "sass" | "less" | "js" | "jsx" | "mjs" | "cjs" | "ts" | "tsx" | "py" |
+        "rs" | "go" | "c" | "h" | "cpp" | "hpp" | "cc" | "cxx" | "cs" | "java" |
+        "kt" | "kts" | "sh" | "bash" | "zsh" | "fish" | "ps1" | "bat" | "cmd" |
+        "sql" | "csv" | "tsv" | "env" | "gitignore" | "gitattributes" | "editorconfig"
+    ) || matches!(
+        name.to_ascii_lowercase().as_str(),
+        "dockerfile" | "makefile" | "license" | "readme"
+    )
+}
+
+fn open_with_system_app(path: &Path) -> Result<Value, String> {
+    let canonical = dunce::canonicalize(path)
+        .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
+    let metadata = fs::metadata(&canonical)
+        .map_err(|error| format!("cannot inspect {}: {error}", path_text(&canonical)))?;
+    if !metadata.is_file() {
+        return Err("Open with System App requires a regular file".to_string());
+    }
+
+    #[cfg(windows)]
+    let mut command = {
+        let mut command = Command::new("explorer.exe");
+        command.arg(&canonical);
+        command
+    };
+    #[cfg(target_os = "linux")]
+    let mut command = {
+        let mut command = Command::new("xdg-open");
+        command.arg(&canonical);
+        command
+    };
+    #[cfg(target_os = "macos")]
+    let mut command = {
+        let mut command = Command::new("open");
+        command.arg(&canonical);
+        command
+    };
+    #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+    return Err("Open with System App is not supported on this platform".to_string());
+
+    command
+        .spawn()
+        .map_err(|error| format!("failed to open system application: {error}"))?;
+
+    Ok(json!({ "opened": true, "path": path_text(&canonical) }))
+}
+
 fn list_directory(path: &Path) -> Result<Value, String> {
     let canonical = dunce::canonicalize(path)
         .map_err(|error| format!("cannot open {}: {error}", path_text(path)))?;
@@ -1199,6 +1259,50 @@ fn dispatch(
                 json!({ "key": UI_STATE_KEY, "value": state }),
             )?;
             Ok(json!({ "stored": true }))
+        }
+        "integration.status" => {
+            let result = host_call(
+                "plugin.available",
+                json!({ "pluginId": "remotehand.editor" }),
+            )?;
+            Ok(json!({
+                "editorAvailable": result
+                    .get("available")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false)
+            }))
+        }
+        "integration.open-editor" => {
+            #[derive(Deserialize)]
+            struct Params { path: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid Open in Editor request: {error}"))?;
+            let canonical = dunce::canonicalize(Path::new(&params.path))
+                .map_err(|error| format!("cannot open {}: {error}", params.path))?;
+            let metadata = fs::metadata(&canonical)
+                .map_err(|error| format!("cannot inspect {}: {error}", path_text(&canonical)))?;
+            if !metadata.is_file() {
+                return Err("Open in Editor requires a regular file".to_string());
+            }
+            if !is_text_like_path(&canonical) {
+                return Err("selected file is not a supported text/code type".to_string());
+            }
+            host_call(
+                "plugin.open_panel",
+                json!({
+                    "pluginId": "remotehand.editor",
+                    "panelId": "editor",
+                    "context": { "path": path_text(&canonical) }
+                }),
+            )?;
+            Ok(json!({ "opened": true }))
+        }
+        "fs.open-system" => {
+            #[derive(Deserialize)]
+            struct Params { path: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid system-open request: {error}"))?;
+            open_with_system_app(Path::new(&params.path))
         }
         "fs.initial" => list_directory(&initial_path()),
         "fs.list" => {
@@ -1404,6 +1508,74 @@ mod tests {
         let _ = fs::remove_dir_all(&path);
         fs::create_dir_all(&path).expect("create temp directory");
         path
+    }
+
+    #[test]
+    fn text_like_detection_covers_editor_targets() {
+        assert!(is_text_like_path(Path::new("notes.txt")));
+        assert!(is_text_like_path(Path::new("script.PY")));
+        assert!(is_text_like_path(Path::new("Dockerfile")));
+        assert!(is_text_like_path(Path::new("README")));
+        assert!(!is_text_like_path(Path::new("photo.png")));
+        assert!(!is_text_like_path(Path::new("document.pdf")));
+    }
+
+    #[test]
+    fn integration_status_reflects_editor_availability() {
+        let jobs = Arc::new(JobManager::default());
+        let property_scans = Arc::new(PropertyScanManager::default());
+        let request = HostRequest {
+            message_type: "host.request".to_string(),
+            request_id: 1,
+            method: "integration.status".to_string(),
+            params: Value::Null,
+        };
+
+        let mut available_call = |method: &str, params: Value| {
+            assert_eq!(method, "plugin.available");
+            assert_eq!(params["pluginId"], "remotehand.editor");
+            Ok(json!({ "available": true }))
+        };
+        let result = dispatch(&request, &mut available_call, &jobs, &property_scans).unwrap();
+        assert_eq!(result["editorAvailable"], true);
+
+        let mut unavailable_call = |method: &str, params: Value| {
+            assert_eq!(method, "plugin.available");
+            assert_eq!(params["pluginId"], "remotehand.editor");
+            Ok(json!({ "available": false }))
+        };
+        let result = dispatch(&request, &mut unavailable_call, &jobs, &property_scans).unwrap();
+        assert_eq!(result["editorAvailable"], false);
+    }
+
+    #[test]
+    fn open_editor_revalidates_file_and_routes_context() {
+        let root = temp_dir("open-editor");
+        let file = root.join("hello.txt");
+        fs::write(&file, b"hello").unwrap();
+
+        let jobs = Arc::new(JobManager::default());
+        let property_scans = Arc::new(PropertyScanManager::default());
+        let request = HostRequest {
+            message_type: "host.request".to_string(),
+            request_id: 2,
+            method: "integration.open-editor".to_string(),
+            params: json!({ "path": path_text(&file) }),
+        };
+
+        let expected = path_text(&dunce::canonicalize(&file).unwrap());
+        let mut host_call = |method: &str, params: Value| {
+            assert_eq!(method, "plugin.open_panel");
+            assert_eq!(params["pluginId"], "remotehand.editor");
+            assert_eq!(params["panelId"], "editor");
+            assert_eq!(params["context"]["path"], expected);
+            Ok(json!({ "opened": true }))
+        };
+
+        let result = dispatch(&request, &mut host_call, &jobs, &property_scans).unwrap();
+        assert_eq!(result["opened"], true);
+
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

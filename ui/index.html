@@ -194,6 +194,7 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
   let contextPaneId = null;
   let activePropertiesScanId = null;
   let dragState = null;
+  let editorAvailable = false;
   const panes = {};
 
   const svg = {
@@ -244,6 +245,22 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
     const parts = cleaned.split(/[\\/]/);
     return parts[parts.length - 1] || cleaned;
   };
+
+  const textExtensions = new Set([
+    "txt","md","markdown","log","json","jsonc","yaml","yml","toml","ini","cfg","conf",
+    "xml","html","htm","css","scss","sass","less","js","jsx","mjs","cjs","ts","tsx",
+    "py","rs","go","c","h","cpp","hpp","cc","cxx","cs","java","kt","kts","sh","bash",
+    "zsh","fish","ps1","bat","cmd","sql","csv","tsv","env","gitignore","gitattributes",
+    "editorconfig"
+  ]);
+
+  function isTextLikeEntry(entry) {
+    if (!entry || entry.kind !== "file") return false;
+    const name = String(entry.name || "");
+    const dot = name.lastIndexOf(".");
+    if (dot <= 0 || dot === name.length - 1) return true;
+    return textExtensions.has(name.slice(dot + 1).toLowerCase());
+  }
 
   const kindLabel = entry => {
     if (entry.kind === "symlink") {
@@ -372,7 +389,34 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
     return separator;
   }
 
-  function showContextMenu(pane, x, y) {
+  async function refreshEditorAvailability() {
+    try {
+      const integrations = await request("integration.status");
+      editorAvailable = Boolean(integrations && integrations.editorAvailable);
+    } catch (error) {
+      editorAvailable = false;
+      console.warn("File Manager could not query optional integrations:", error);
+    }
+    return editorAvailable;
+  }
+
+  async function openInEditor(entry) {
+    try {
+      await request("integration.open-editor", { path: entry.path });
+    } catch (error) {
+      await messageModal("Could not open in Editor", String(error));
+    }
+  }
+
+  async function openWithSystemApp(entry) {
+    try {
+      await request("fs.open-system", { path: entry.path });
+    } catch (error) {
+      await messageModal("Could not open file", String(error));
+    }
+  }
+
+  async function showContextMenu(pane, x, y) {
     setActivePane(pane.id);
     const entries = selectedEntries(pane);
     if (entries.length === 0) return;
@@ -380,8 +424,27 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
     contextPaneId = pane.id;
     const single = entries.length === 1;
     const operationRunning = activeJobId !== null;
+    const entry = single ? entries[0] : null;
+    const regularFile = Boolean(entry && entry.kind === "file");
+    const textLikeFile = regularFile && isTextLikeEntry(entry);
 
-    contextMenu.replaceChildren(
+    if (textLikeFile) {
+      await refreshEditorAvailability();
+    }
+
+    contextMenu.replaceChildren();
+
+    if (regularFile) {
+      if (editorAvailable && textLikeFile) {
+        contextMenu.append(contextMenuButton("Open in Editor", () => openInEditor(entry)));
+      }
+      contextMenu.append(
+        contextMenuButton("Open with System App", () => openWithSystemApp(entry)),
+        contextMenuSeparator()
+      );
+    }
+
+    contextMenu.append(
       contextMenuButton("Copy", () => setClipboard("copy"), operationRunning),
       contextMenuButton("Cut", () => setClipboard("move"), operationRunning),
       contextMenuSeparator(),
@@ -639,7 +702,7 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
             this.selectionAnchorIndex = entryIndex;
             this.render();
           }
-          showContextMenu(this, event.clientX, event.clientY);
+          void showContextMenu(this, event.clientX, event.clientY);
         });
 
         const canNavigate = entry.kind === "directory"
@@ -876,6 +939,24 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
       modalBackdrop.hidden = false;
       input.focus();
       input.select();
+    });
+  }
+
+  function messageModal(title, message) {
+    return new Promise(resolve => {
+      modalTitle.textContent = title;
+      modalBody.replaceChildren();
+      const p = document.createElement("p");
+      p.textContent = message;
+      modalBody.append(p);
+      modalActions.replaceChildren();
+      const close = actionButton("Close", true);
+      const finish = () => { closeModal(); resolve(); };
+      modalDismiss = finish;
+      close.addEventListener("click", finish);
+      modalActions.append(close);
+      modalBackdrop.hidden = false;
+      close.focus();
     });
   }
 
@@ -1370,6 +1451,9 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
   async function initialize() {
     panes.left = new BrowserPane("left");
     panes.right = new BrowserPane("right");
+
+    await refreshEditorAvailability();
+
     let stored = null;
     try { stored = await request("ui.state.get"); }
     catch (error) { console.warn("File Manager could not restore UI state:", error); }
