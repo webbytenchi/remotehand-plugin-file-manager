@@ -15,7 +15,8 @@
   },
   "permissions": [
     "storage.plugin",
-    "plugins.open"
+    "plugins.open",
+    "clipboard.write"
   ],
   "contributes": {
     "sidebar": [
