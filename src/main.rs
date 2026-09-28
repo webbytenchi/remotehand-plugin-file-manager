@@ -14,7 +14,7 @@ use std::thread;
 use std::time::UNIX_EPOCH;
 
 const PLUGIN_ID: &str = "remotehand.file-manager";
-const PLUGIN_VERSION: &str = "0.2.1";
+const PLUGIN_VERSION: &str = "0.2.2";
 const API_VERSION: u32 = 1;
 const MAX_FRAME_BYTES: usize = 4 * 1024 * 1024;
 const UI_STATE_KEY: &str = "ui-state-v1";
