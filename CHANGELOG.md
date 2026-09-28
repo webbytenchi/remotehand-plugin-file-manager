@@ -1,5 +1,23 @@
 # Changelog
 
+## v0.2.2 - 2026-09-29
+
+### Changed
+
+- Copy Path and Copy Filename now use RemoteHand's generic `clipboard.write` host API exclusively.
+- Removed browser clipboard fallbacks from the sandboxed plugin UI.
+
+### Compatibility
+
+- Plugin API remains **v1**.
+- Existing browsing, file operations, and Open in Editor behavior are unchanged.
+
+### Verification
+
+- Rust tests passed with **15 tests and 0 failures**.
+- Windows package build passed.
+- Manual Windows acceptance confirmed Copy Path and Copy Filename through the host clipboard API.
+
 All notable changes to RemoteHand File Manager are documented here.
 
 ## v0.2.1 - 2026-09-28
