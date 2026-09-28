@@ -342,25 +342,7 @@ tr.entry.drag-target{outline:2px solid var(--remotehand-accent,#579ce7);outline-
   async function copyText(text) {
     const value = String(text ?? "");
     if (!value) return;
-    try {
-      if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
-        await navigator.clipboard.writeText(value);
-        return;
-      }
-    } catch (_) {
-      // Fall through to the legacy clipboard path for WebView environments.
-    }
-
-    const input = document.createElement("textarea");
-    input.value = value;
-    input.setAttribute("readonly", "");
-    input.style.position = "fixed";
-    input.style.opacity = "0";
-    document.body.append(input);
-    input.select();
-    const copied = document.execCommand("copy");
-    input.remove();
-    if (!copied) throw new Error("clipboard access is unavailable");
+    await request("clipboard.write", { text: value });
   }
 
   function hideContextMenu() {
