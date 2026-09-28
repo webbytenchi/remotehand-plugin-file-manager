@@ -2,6 +2,17 @@
 
 All notable changes to RemoteHand File Manager are documented here.
 
+## v0.2.1 - 2026-09-28
+
+### Fixed
+
+- Corrected the executable Plugin API handshake version so it matches the installed v0.2.1 manifest.
+- Fixed the `plugin hello version does not match installed manifest` startup error from v0.2.0.
+
+### Verification
+
+- Added a regression test that checks the runtime plugin version matches `plugin.json`.
+
 ## v0.2.0 - 2026-09-28
 
 ### Integration
