@@ -1238,6 +1238,16 @@ fn dispatch(
             "apiVersion": API_VERSION,
             "status": "ok"
         })),
+        "clipboard.write" => {
+            #[derive(Deserialize)]
+            struct Params { text: String }
+            let params: Params = serde_json::from_value(request.params.clone())
+                .map_err(|error| format!("invalid clipboard.write request: {error}"))?;
+            if params.text.is_empty() || params.text.len() > 64 * 1024 {
+                return Err("clipboard text must be between 1 byte and 64 KiB".to_string());
+            }
+            host_call("clipboard.write", json!({ "text": params.text }))
+        }
         "ui.state.get" => {
             let result = host_call("storage.get", json!({ "key": UI_STATE_KEY }))?;
             let state = match result.get("value") {
